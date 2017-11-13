@@ -1,0 +1,139 @@
+// Primitives
+
+alpha = _{ 'a'..'z' | 'A'..'Z' }
+digit = _{ '0'..'9' }
+
+float = _{ digit+ ~ "." ~ digit+ }
+
+ws = _{ " " | "\t" | "\n" }
+
+var = { ("_" | alpha) ~ ("_" | alpha | digit)* }
+
+// MIXED
+
+schema_specifed = { var ~ ws* ~ "." ~ ws* ~ var }
+table_ident = { schema_specifed | var }
+ttype = { schema_specifed | var }
+setof = { ^"setof" ~ ws+ ~ ttype }
+action = { "TODO" }
+
+string = { "$$" ~ (!("$$") ~ any)* ~ "$$" }
+
+// Expression
+
+function_name = { var }
+function_arguments = { expr ~ (ws* ~ "," ~ ws* ~ expr)* }
+function_call = { function_name ~ ws* ~ "(" ~ ws* ~ function_arguments? ~ ws* ~ ")" }
+expr = { function_call }
+
+// Create Statement
+
+if_not_exists = { ^"if" ~ ws+ ~ ^"not" ~ ws* ~ ^"exists" }
+or_replace = { ^"or" ~ ws+ ~ ^"replace" }
+collation = { "TODO" }
+collate = { ^"collate" ~ ws* ~ collation }
+
+column_index_parameters = { "TODO" }
+
+column_not_null = { ^"not" ~ ws+ ~ ^"null" }
+column_null = { ^"null" }
+column_check = { ^"check" ~ ws+ ~ expr }
+column_default = { ^"default" ~ ws+ ~ expr }
+column_unique = { ^"unique" ~ (ws+ ~ column_index_parameters)? }
+column_primary_key = { ^"primary" ~ ws+ ~ ^"key" ~ (ws+ ~ column_index_parameters)? }
+column_references_match_full = { ^"match" ~ ws+ ~ ^"full" }
+column_references_match_partial = { ^"match" ~ ws+ ~ ^"partial" }
+column_references_match_simple = { ^"match" ~ ws+ ~ ^"simple" }
+column_references_match = {
+  column_references_match_full |
+  column_references_match_partial |
+  column_references_match_simple
+}
+column_references_column = { "(" ~ ws* ~ var ~ ws* ~ ")" }
+column_references_action_delete = { ^"on" ~ ws+ ~ ^"delete" }
+column_references_action_update = { ^"on" ~ ws+ ~ ^"update" }
+column_references_action = {
+  column_references_action_delete | column_references_action_update ~ action
+}
+column_references = {
+  ^"references" ~ ws+ ~ table_ident ~ ws+ ~
+  (column_references_column ~ ws*)? ~
+  column_references_match?
+}
+column_constraint = {
+  column_not_null |
+  column_null |
+  column_check |
+  column_default |
+  column_unique |
+  column_primary_key |
+  column_references
+}
+column_constraints = { column_constraint ~ (ws+ ~ column_constraint)* }
+
+create_table_item = { var ~ ws+ ~ var ~ (ws+ ~ collate)? ~ (ws+ ~ column_constraints)? }
+create_table_body = _{ create_table_item ~ (ws* ~ "," ~ ws* ~ create_table_item)* }
+create_table = { ^"table" ~ ws+ ~ (if_not_exists ~ ws*)? ~ table_ident ~ ws* ~ "(" ~
+  ws* ~ create_table_body ~ ws* ~
+")" }
+
+create_function_arg_mode_in = { ^"in" }
+create_function_arg_mode_out = { ^"out" }
+create_function_arg_mode_inout = { ^"inout" }
+create_function_arg_mode_variadic = { ^"variadic" }
+create_function_arg_mode = {
+  create_function_arg_mode_in |
+  create_function_arg_mode_out |
+  create_function_arg_mode_inout |
+  create_function_arg_mode_variadic
+}
+create_function_arg_default = { ((^"default" ~ ws+) | ("=" ~ ws*)) ~ expr }
+create_function_arg = {
+  (create_function_arg_mode ~ ws+)? ~
+  (table_ident ~ ws+)? ~
+  ttype ~
+  (ws+ ~ create_function_arg_default)?
+}
+create_function_args = { create_function_arg ~ (ws* ~ "," ~ ws* ~ create_function_arg)* }
+create_function_returns = { ^"returns" ~ ws+ ~ (create_table | setof | ttype) }
+create_function_body_as_def = { ^"as" ~ ws+ ~ string }
+create_function_body_language = { ^"language" ~ ws+ ~ var }
+create_function_body_item = { create_function_body_as_def | create_function_body_language }
+create_function_body_list = { create_function_body_item ~ (ws+ ~ create_function_body_item)* }
+create_function = {
+  (or_replace ~ ws+)? ~ ^"function" ~ ws+ ~ table_ident ~ ws* ~ "(" ~
+    ws* ~ create_function_args ~ ws* ~
+  ")" ~ ws* ~ create_function_returns ~ ws+ ~
+  create_function_body_list
+}
+
+create_view = { ^"view" ~ table_ident }
+create_schema = { ^"schema" ~ ws* ~ var }
+create_stmt = _{ ^"create" ~ ws+ ~ (create_table | create_view | create_schema | create_function) }
+
+// Select Statement
+
+all = { "*" }
+select_clause_sub_field = { var ~ ws* ~ "." ~ ws* ~ (all | var) }
+
+select_clause_item = { (all | select_clause_sub_field | var) ~ (ws+ ~ ^"as" ~ ws+ ~ var)? }
+select_clause = { select_clause_item ~ (ws* ~ "," ~ ws* ~ select_clause_item)* }
+
+select_stmt = { ^"select" ~ ws+ ~ select_clause ~ ws+ ~ ^"from" ~ ws+ ~ table_ident }
+
+// Statement
+
+comment = { "--" ~ (!("\n") ~ any)* ~ "\n" }
+
+stmt = { create_stmt | select_stmt }
+
+document = {
+  soi ~
+  (
+    ws* ~
+    (stmt ~ ws* ~ ";")~
+    ws*
+  )* ~
+  stmt? ~
+  ws* ~ eoi
+}
