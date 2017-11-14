@@ -5,59 +5,64 @@ digit = _{ '0'..'9' }
 
 float = _{ digit+ ~ "." ~ digit+ }
 
-ws = _{ " " | "\t" | "\n" }
+whitespace = _{ " " | "\t" | "\r" | "\n" }
 
-var = { ("_" | alpha) ~ ("_" | alpha | digit)* }
+var = @{ ("_" | alpha) ~ ("_" | alpha | digit)* }
 
 // MIXED
 
-schema_specifed = { var ~ ws* ~ "." ~ ws* ~ var }
-table_ident = { schema_specifed | var }
-ttype = { schema_specifed | var }
-setof = { ^"setof" ~ ws+ ~ ttype }
+escaped_var = @{ "`" ~ var ~ "`" }
+s_var = { escaped_var | var }
+schema_specifed = { s_var ~ "." ~ s_var }
+table_ident = { schema_specifed | s_var }
+ttype = { schema_specifed | s_var }
+setof = { ^"setof" ~ ttype }
 action = { "TODO" }
 
-string = { "$$" ~ (!("$$") ~ any)* ~ "$$" }
+dollar_quoted_start = @{ "$" ~ (!"$" ~ any)* ~ "$" }
+dollar_inners = { (!peek ~ any)* }
+dollar_quoted = { push(dollar_quoted_start) ~ dollar_inners ~ pop }
+string = { dollar_quoted }
 
 // Expression
 
-function_name = { var }
-function_arguments = { expr ~ (ws* ~ "," ~ ws* ~ expr)* }
-function_call = { function_name ~ ws* ~ "(" ~ ws* ~ function_arguments? ~ ws* ~ ")" }
+function_name = { table_ident }
+function_arguments = { expr ~ ("," ~ expr)* }
+function_call = { function_name ~ "(" ~ function_arguments? ~ ")" }
 expr = { function_call }
 
 // Create Statement
 
-if_not_exists = { ^"if" ~ ws+ ~ ^"not" ~ ws* ~ ^"exists" }
-or_replace = { ^"or" ~ ws+ ~ ^"replace" }
+if_not_exists = { ^"if" ~ ^"not" ~ ^"exists" }
+or_replace = { ^"or" ~ ^"replace" }
 collation = { "TODO" }
-collate = { ^"collate" ~ ws* ~ collation }
+collate = { ^"collate" ~ collation }
 
 column_index_parameters = { "TODO" }
 
-column_not_null = { ^"not" ~ ws+ ~ ^"null" }
+column_not_null = { ^"not" ~ ^"null" }
 column_null = { ^"null" }
-column_check = { ^"check" ~ ws+ ~ expr }
-column_default = { ^"default" ~ ws+ ~ expr }
-column_unique = { ^"unique" ~ (ws+ ~ column_index_parameters)? }
-column_primary_key = { ^"primary" ~ ws+ ~ ^"key" ~ (ws+ ~ column_index_parameters)? }
-column_references_match_full = { ^"match" ~ ws+ ~ ^"full" }
-column_references_match_partial = { ^"match" ~ ws+ ~ ^"partial" }
-column_references_match_simple = { ^"match" ~ ws+ ~ ^"simple" }
+column_check = { ^"check" ~ expr }
+column_default = { ^"default" ~ expr }
+column_unique = { ^"unique" ~ (column_index_parameters)? }
+column_primary_key = { ^"primary" ~ ^"key" ~ (column_index_parameters)? }
+column_references_match_full = { ^"match" ~ ^"full" }
+column_references_match_partial = { ^"match" ~ ^"partial" }
+column_references_match_simple = { ^"match" ~ ^"simple" }
 column_references_match = {
   column_references_match_full |
   column_references_match_partial |
   column_references_match_simple
 }
-column_references_column = { "(" ~ ws* ~ var ~ ws* ~ ")" }
-column_references_action_delete = { ^"on" ~ ws+ ~ ^"delete" }
-column_references_action_update = { ^"on" ~ ws+ ~ ^"update" }
+column_references_column = { "(" ~ s_var ~ ")" }
+column_references_action_delete = { ^"on" ~ ^"delete" }
+column_references_action_update = { ^"on" ~ ^"update" }
 column_references_action = {
   column_references_action_delete | column_references_action_update ~ action
 }
 column_references = {
-  ^"references" ~ ws+ ~ table_ident ~ ws+ ~
-  (column_references_column ~ ws*)? ~
+  ^"references" ~ table_ident ~
+  (column_references_column)? ~
   column_references_match?
 }
 column_constraint = {
@@ -69,12 +74,12 @@ column_constraint = {
   column_primary_key |
   column_references
 }
-column_constraints = { column_constraint ~ (ws+ ~ column_constraint)* }
+column_constraints = { column_constraint ~ (column_constraint)* }
 
-create_table_item = { var ~ ws+ ~ var ~ (ws+ ~ collate)? ~ (ws+ ~ column_constraints)? }
-create_table_body = _{ create_table_item ~ (ws* ~ "," ~ ws* ~ create_table_item)* }
-create_table = { ^"table" ~ ws+ ~ (if_not_exists ~ ws*)? ~ table_ident ~ ws* ~ "(" ~
-  ws* ~ create_table_body ~ ws* ~
+create_table_item = { s_var ~ ttype ~ collate? ~ column_constraints? }
+create_table_body = _{ create_table_item ~ ("," ~ create_table_item)* }
+create_table = { ^"table" ~ if_not_exists? ~ table_ident ~ "(" ~
+  create_table_item ~ ("," ~ create_table_item)* ~
 ")" }
 
 create_function_arg_mode_in = { ^"in" }
@@ -87,53 +92,63 @@ create_function_arg_mode = {
   create_function_arg_mode_inout |
   create_function_arg_mode_variadic
 }
-create_function_arg_default = { ((^"default" ~ ws+) | ("=" ~ ws*)) ~ expr }
+create_function_arg_default = { (^"default" | "=") ~ expr }
 create_function_arg = {
-  (create_function_arg_mode ~ ws+)? ~
-  (table_ident ~ ws+)? ~
+  create_function_arg_mode? ~
+  table_ident? ~
   ttype ~
-  (ws+ ~ create_function_arg_default)?
+  create_function_arg_default?
 }
-create_function_args = { create_function_arg ~ (ws* ~ "," ~ ws* ~ create_function_arg)* }
-create_function_returns = { ^"returns" ~ ws+ ~ (create_table | setof | ttype) }
-create_function_body_as_def = { ^"as" ~ ws+ ~ string }
-create_function_body_language = { ^"language" ~ ws+ ~ var }
+create_function_args = { create_function_arg ~ ("," ~ create_function_arg)* }
+create_function_returns = { ^"returns" ~ (create_table | setof | ttype) }
+create_function_body_as_def = { ^"as" ~ string }
+create_function_body_language = { ^"language" ~ s_var }
 create_function_body_item = { create_function_body_as_def | create_function_body_language }
-create_function_body_list = { create_function_body_item ~ (ws+ ~ create_function_body_item)* }
+create_function_body_list = { create_function_body_item ~ create_function_body_item* }
 create_function = {
-  (or_replace ~ ws+)? ~ ^"function" ~ ws+ ~ table_ident ~ ws* ~ "(" ~
-    ws* ~ create_function_args ~ ws* ~
-  ")" ~ ws* ~ create_function_returns ~ ws+ ~
+  or_replace? ~ ^"function" ~ table_ident ~ "(" ~
+     create_function_args ~ 
+  ")" ~ create_function_returns ~
   create_function_body_list
 }
 
 create_view = { ^"view" ~ table_ident }
-create_schema = { ^"schema" ~ ws* ~ var }
-create_stmt = _{ ^"create" ~ ws+ ~ (create_table | create_view | create_schema | create_function) }
+create_schema = { ^"schema" ~ s_var }
+create_stmt = _{ ^"create" ~ (create_table | create_view | create_schema | create_function) }
+
+// Transaction Statements
+
+begin_stmt = { ^"begin" }
+end_stmt = { ^"end" ~ ";" }
+transaction_stmt = { begin_stmt | end_stmt }
 
 // Select Statement
 
 all = { "*" }
-select_clause_sub_field = { var ~ ws* ~ "." ~ ws* ~ (all | var) }
 
-select_clause_item = { (all | select_clause_sub_field | var) ~ (ws+ ~ ^"as" ~ ws+ ~ var)? }
-select_clause = { select_clause_item ~ (ws* ~ "," ~ ws* ~ select_clause_item)* }
+select_with_query = { "TODO" }
+select_with = { ^"with" ~ select_with_query }
+select_clause_item = { (all | expr) ~ (^"as" ~ var)? }
+select_clause = { select_clause_item ~ ("," ~ select_clause_item)* }
+select_from_item = { table_ident }
+select_from = { ^"from" ~ select_from_item }
+select_where = { ^"where" ~ select_from_item }
 
-select_stmt = { ^"select" ~ ws+ ~ select_clause ~ ws+ ~ ^"from" ~ ws+ ~ table_ident }
+select_stmt = { select_with? ~ ^"select" ~ select_clause ~ select_from? ~ select_where? }
 
 // Statement
 
-comment = { "--" ~ (!("\n") ~ any)* ~ "\n" }
+comment = {
+  // line comment
+  "--" ~ ((!("\n") ~ any)* ~ ("\n" | eoi)) |
+  // block comment
+  "/*" ~ (!"*/" ~ any)*
+}
 
-stmt = { create_stmt | select_stmt }
+stmt = { create_stmt | select_stmt | transaction_stmt }
 
 document = {
   soi ~
-  (
-    ws* ~
-    (stmt ~ ws* ~ ";")~
-    ws*
-  )* ~
-  stmt? ~
-  ws* ~ eoi
+  (stmt ~ ";")* ~ stmt? ~
+  eoi
 }

@@ -5,6 +5,14 @@ extern crate pest;
 extern crate pest_derive;
 
 mod parser;
+mod format;
+
+use format::Format;
+
+fn prettify(s: &str, _options: Option<format::Options>) -> Result<String, parser::ParseError> {
+    let ctx = format::Context::default();
+    Ok(parser::Document::parse(&s)?.format(&ctx))
+}
 
 fn main() {
     use std::io::Read;
@@ -14,6 +22,12 @@ fn main() {
         .unwrap()
         .read_to_string(&mut d)
         .unwrap();
-    let doc = parser::Document::parse(&d);
-    println!("{:?}", doc);
+
+    let a = prettify(&d, None).unwrap();
+    println!("{}", a);
+
+    let b = prettify(&a, None).unwrap();
+    println!("{}", b);
+
+    assert_eq!(a, b);
 }

@@ -3,9 +3,9 @@ use pest::Parser;
 
 #[derive(Parser)]
 #[grammar = "sql.pest"]
-struct IdentParser;
+pub struct IdentParser;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ParseError {
   Dunno,
   Unparseable(String),
@@ -36,7 +36,8 @@ fn a<T, I: Iterator<Item = Result<T, ParseError>>>(a: I) -> Result<Vec<T>, Parse
 
 trait Ps<'a>: Iterator<Item = P<'a>> {
   fn pop(&mut self) -> Result<P<'a>, ParseError> {
-    self.next().ok_or(ParseError::Dunno)
+    // self.next().ok_or(ParseError::Dunno)
+    Ok(self.next().ok_or(ParseError::Dunno).unwrap())
   }
 }
 
@@ -53,31 +54,76 @@ macro_rules! unparseable {
     });
 }
 
+macro_rules! rule {
+  ($t:expr, { $( $x:ident => $b:expr )* }) => {
+    match $t.as_rule() {
+      $(
+        Rule::$x => $b,
+      )*
+      _ => unparseable!($t)
+    }
+  };
+}
+
 trait Parseable: Sized {
-  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Self, ParseError>;
+  fn parse<'a, I: Ps<'a>>(inp: I) -> Result<Self, ParseError>;
 }
 
-#[derive(Debug)]
-struct TableIdent {
-  schema: String,
-  name: String,
+#[derive(Debug, PartialEq, Clone)]
+pub enum Var {
+  Raw(String),
+  Escaped(String),
+}
+use std;
+
+impl Var {
+  fn contents<'a>(&'a self) -> &'a str {
+    match self {
+      &Var::Raw(ref s) => s,
+      &Var::Escaped(ref s) => s,
+    }
+  }
 }
 
-const DEFAULT_SCHEMA: &str = "default";
+impl std::cmp::PartialOrd for Var {
+  fn partial_cmp(&self, b: &Var) -> Option<std::cmp::Ordering> {
+    self.contents().partial_cmp(b.contents())
+  }
+}
+
+impl Parseable for Var {
+  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Var, ParseError> {
+    let t = inp.pop()?;
+
+    Ok(rule!(t, {
+      escaped_var => {
+        let s = t.as_str().to_owned();
+        Var::Escaped((&s[1..s.len() - 1]).to_owned())
+      }
+      var => Var::Raw(t.as_str().to_owned())
+    }))
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct TableIdent {
+  pub schema: Option<Var>,
+  pub name: Var,
+}
 
 impl Parseable for TableIdent {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<TableIdent, ParseError> {
     let t = inp.pop()?;
     Ok(match t.as_rule() {
-      Rule::var => TableIdent {
-        schema: DEFAULT_SCHEMA.to_owned(),
-        name: t.as_str().to_owned(),
+      Rule::s_var => TableIdent {
+        schema: None,
+        name: Var::parse(t.into_inner())?,
       },
       Rule::schema_specifed => {
         let mut inp = t.into_inner();
         TableIdent {
-          schema: inp.pop()?.as_str().to_owned(),
-          name: inp.pop()?.as_str().to_owned(),
+          schema: Some(Var::parse(inp.pop()?.into_inner())?),
+          name: Var::parse(inp.pop()?.into_inner())?,
         }
       }
       _ => unparseable!(t),
@@ -85,25 +131,25 @@ impl Parseable for TableIdent {
   }
 }
 
-#[derive(Debug)]
-struct Ttype {
-  schema: String,
-  name: String,
+#[derive(Debug, Clone)]
+pub struct Ttype {
+  pub schema: Option<Var>,
+  pub name: Var,
 }
 
 impl Parseable for Ttype {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Ttype, ParseError> {
     let t = inp.pop()?;
     Ok(match t.as_rule() {
-      Rule::var => Ttype {
-        schema: DEFAULT_SCHEMA.to_owned(),
-        name: t.as_str().to_owned(),
+      Rule::s_var => Ttype {
+        schema: None,
+        name: Var::parse(t.into_inner())?,
       },
       Rule::schema_specifed => {
         let mut inp = t.into_inner();
         Ttype {
-          schema: inp.pop()?.as_str().to_owned(),
-          name: inp.pop()?.as_str().to_owned(),
+          schema: Some(Var::parse(inp.pop()?.into_inner())?),
+          name: Var::parse(inp.pop()?.into_inner())?,
         }
       }
       _ => unparseable!(t),
@@ -111,55 +157,96 @@ impl Parseable for Ttype {
   }
 }
 
-#[derive(Debug)]
-struct Expression {
-  schema: String,
-  name: String,
+#[derive(Debug, Clone)]
+pub struct FunctionCall {
+  pub base: TableIdent,
+  pub args: Option<Vec<Expression>>,
+}
+
+impl Parseable for FunctionCall {
+  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<FunctionCall, ParseError> {
+    let t = inp.pop()?;
+    let name = match t.as_rule() {
+      Rule::function_name => {
+        let mut inp = t.into_inner();
+        let t = inp.pop()?;
+        rule!(t, {
+          table_ident => TableIdent::parse(t.into_inner())
+        })
+      }
+      _ => unparseable!(t),
+    }?;
+
+    let t = inp.next();
+    let args = match t {
+      Some(t) => Some(a(match t.as_rule() {
+        Rule::function_arguments => t.into_inner().map(|t| match t.as_rule() {
+          Rule::expr => Expression::parse(t.into_inner()),
+          _ => unparseable!(t),
+        }),
+        _ => unparseable!(t),
+      })?),
+      None => None,
+    };
+
+    Ok(FunctionCall {
+      base: name,
+      args: args,
+    })
+  }
+}
+
+#[derive(Debug, Clone)]
+pub enum Expression {
+  FunctionCall(FunctionCall),
 }
 
 impl Parseable for Expression {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Expression, ParseError> {
-    unimplemented!()
+    let t = inp.pop()?;
+    rule!(t, {
+      function_call => {
+        FunctionCall::parse(t.into_inner()).map(|c| Expression::FunctionCall(c))
+      }
+    })
   }
 }
 
-#[derive(Debug)]
-enum ColumnConstraintReferencesMatch {
+#[derive(Debug, Clone)]
+pub enum ColumnConstraintReferencesMatch {
   Full,
   Partial,
   Simple,
 }
 
-#[derive(Debug)]
-struct ColumnConstraintReferences {
-  table: TableIdent,
-  column: Option<String>,
-  mmatch: Option<ColumnConstraintReferencesMatch>,
+#[derive(Debug, Clone)]
+pub struct ColumnConstraintReferences {
+  pub table: TableIdent,
+  pub column: Option<Var>,
+  pub mmatch: Option<ColumnConstraintReferencesMatch>,
 }
 
 impl Parseable for ColumnConstraintReferences {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<ColumnConstraintReferences, ParseError> {
     let t = inp.pop()?;
-    let table = match t.as_rule() {
-      Rule::table_ident => TableIdent::parse(t.into_inner())?,
-      _ => unparseable!(t),
-    };
+    let table = rule!(t, {
+      table_ident => TableIdent::parse(t.into_inner())?
+    });
 
     let t = inp.next();
     let (t, column) = match t {
-      Some(t) => match t.as_rule() {
-        Rule::column_references_column => {
-          (inp.next(), Some(t.into_inner().pop()?.as_str().to_owned()))
-        }
-        _ => unparseable!(t),
-      },
+      Some(t) => rule!(t, {
+        column_references_column => (
+          inp.next(),
+          Some(Var::parse(t.into_inner().pop()?.into_inner())?),
+        )
+      }),
       None => (t, None),
     };
     let (t, mmatch) = match t {
-      Some(t) => match t.as_rule() {
-        Rule::column_references_match => unimplemented!(),
-        _ => unparseable!(t),
-      },
+      Some(t) => rule!(t, {
+        column_references_match => unimplemented!()
+      }),
       None => (t, None),
     };
 
@@ -171,12 +258,12 @@ impl Parseable for ColumnConstraintReferences {
   }
 }
 
-#[derive(Debug)]
-enum ColumnConstraint {
+#[derive(Debug, Clone)]
+pub enum ColumnConstraint {
   NotNull,
   Null,
   Check,
-  Default,
+  Default(Expression),
   Unique,
   PrimaryKey,
   References(ColumnConstraintReferences),
@@ -189,7 +276,14 @@ impl Parseable for ColumnConstraint {
       Rule::column_not_null => ColumnConstraint::NotNull,
       Rule::column_null => ColumnConstraint::Null,
       Rule::column_check => ColumnConstraint::Check,
-      Rule::column_default => ColumnConstraint::Default,
+      Rule::column_default => {
+        let mut inp = t.into_inner();
+        let t = inp.pop()?;
+        match t.as_rule() {
+          Rule::expr => ColumnConstraint::Default(Expression::parse(t.into_inner())?),
+          _ => unparseable!(t),
+        }
+      }
       Rule::column_unique => ColumnConstraint::Unique,
       Rule::column_primary_key => ColumnConstraint::PrimaryKey,
       Rule::column_references => {
@@ -200,30 +294,30 @@ impl Parseable for ColumnConstraint {
   }
 }
 
-#[derive(Debug)]
-struct CreateTableField {
-  name: String,
-  ttype: String,
-  constraints: Option<Vec<ColumnConstraint>>,
+#[derive(Debug, Clone)]
+pub struct CreateTableField {
+  pub name: Var,
+  pub ttype: Ttype,
+  pub constraints: Option<Vec<ColumnConstraint>>,
 }
 
 impl Parseable for CreateTableField {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<CreateTableField, ParseError> {
     let t = inp.pop()?;
     let name = match t.as_rule() {
-      Rule::var => t.as_str().to_owned(),
+      Rule::s_var => Var::parse(t.into_inner())?,
       _ => unparseable!(t),
     };
 
     let t = inp.pop()?;
     let ttype = match t.as_rule() {
-      Rule::var => t.as_str().to_owned(),
+      Rule::ttype => Ttype::parse(t.into_inner())?,
       _ => unparseable!(t),
     };
 
     // TODO COLLATE
 
-    let constraints = match inp.pop().ok().map(|t| match t.as_rule() {
+    let constraints = match inp.next().map(|t| match t.as_rule() {
       Rule::column_constraints => a(t.into_inner().map(|t| match t.as_rule() {
         Rule::column_constraint => ColumnConstraint::parse(t.into_inner()),
         _ => unparseable!(t),
@@ -242,11 +336,11 @@ impl Parseable for CreateTableField {
   }
 }
 
-#[derive(Debug)]
-struct CreateTable {
-  name: TableIdent,
-  if_not_exsists: bool,
-  fields: Vec<CreateTableField>,
+#[derive(Debug, Clone)]
+pub struct CreateTable {
+  pub name: TableIdent,
+  pub if_not_exsists: bool,
+  pub fields: Vec<CreateTableField>,
 }
 
 impl Parseable for CreateTable {
@@ -273,70 +367,81 @@ impl Parseable for CreateTable {
   }
 }
 
-#[derive(Debug)]
-enum SelectClauseItem {
-  As(Box<SelectClauseItem>, String),
-  Field(String),
-  SubField(String, Box<SelectClauseItem>),
+#[derive(Debug, Clone)]
+pub enum ExprOrAll {
   All,
+  Expression(Expression),
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectClauseItem {
+  pub expr_or_all: ExprOrAll,
+  pub ass: Option<String>,
 }
 
 impl Parseable for SelectClauseItem {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<SelectClauseItem, ParseError> {
     let t = inp.pop()?;
-    let f = match t.as_rule() {
-      Rule::all => SelectClauseItem::All,
-      Rule::select_clause_sub_field => {
-        let mut inp = t.into_inner();
-        let t = inp.pop()?;
-        let base = match t.as_rule() {
-          Rule::var => t.as_str().to_owned(),
-          _ => unparseable!(t),
-        };
-
-        let t = inp.pop()?;
-        let sub = match t.as_rule() {
-          Rule::var => SelectClauseItem::Field(t.as_str().to_owned()),
-          Rule::all => SelectClauseItem::All,
-          _ => unparseable!(t),
-        };
-
-        SelectClauseItem::SubField(base, Box::new(sub))
-      }
+    let expr_or_all = match t.as_rule() {
+      Rule::all => ExprOrAll::All,
+      Rule::expr => ExprOrAll::Expression(Expression::parse(t.into_inner())?),
       _ => unparseable!(t),
     };
 
-    Ok(f)
+    let t = inp.next();
+    let ass = match t {
+      Some(t) => match t.as_rule() {
+        Rule::select_from => None,
+        _ => unparseable!(t),
+      },
+      None => None,
+    };
+
+    Ok(SelectClauseItem {
+      expr_or_all: expr_or_all,
+      ass: ass,
+    })
   }
 }
 
-#[derive(Debug)]
-struct SelectClause(Vec<SelectClauseItem>);
+#[derive(Debug, Clone)]
+pub struct SelectClause(pub Vec<SelectClauseItem>);
 
 impl Parseable for SelectClause {
-  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<SelectClause, ParseError> {
+  fn parse<'a, I: Ps<'a>>(inp: I) -> Result<SelectClause, ParseError> {
     Ok(SelectClause(
       a(inp.map(|t| SelectClauseItem::parse(t.into_inner())))?,
     ))
   }
 }
 
-#[derive(Debug)]
-enum FromClause {
+#[derive(Debug, Clone)]
+pub enum FromClause {
   Table(TableIdent),
-  Schema(String, Box<FromClause>),
 }
 
 impl Parseable for FromClause {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<FromClause, ParseError> {
-    unimplemented!()
+    let t = inp.pop()?;
+    Ok(match t.as_rule() {
+      Rule::select_from_item => {
+        let mut inp = t.into_inner();
+        let t = inp.pop()?;
+
+        match t.as_rule() {
+          Rule::table_ident => FromClause::Table(TableIdent::parse(t.into_inner())?),
+          _ => unparseable!(t),
+        }
+      }
+      _ => unparseable!(t),
+    })
   }
 }
 
-#[derive(Debug)]
-struct Select {
-  clause: SelectClause,
-  from: FromClause,
+#[derive(Debug, Clone)]
+pub struct Select {
+  pub clause: SelectClause,
+  pub from: FromClause,
 }
 
 impl Parseable for Select {
@@ -349,7 +454,7 @@ impl Parseable for Select {
 
     let t = inp.pop()?;
     let from_clause = match t.as_rule() {
-      Rule::table_ident => FromClause::Table(TableIdent::parse(t.into_inner())?),
+      Rule::select_from => FromClause::parse(t.into_inner())?,
       _ => unparseable!(t),
     };
 
@@ -360,18 +465,18 @@ impl Parseable for Select {
   }
 }
 
-#[derive(Debug)]
-struct CreateSchema(String);
+#[derive(Debug, Clone)]
+pub struct CreateSchema(pub Var);
 
 impl Parseable for CreateSchema {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<CreateSchema, ParseError> {
     let t = inp.pop()?;
-    Ok(CreateSchema(t.as_str().to_owned()))
+    Ok(CreateSchema(Var::parse(t.into_inner())?))
   }
 }
 
-#[derive(Debug)]
-enum CreateFunctionArgMode {
+#[derive(Debug, Clone)]
+pub enum CreateFunctionArgMode {
   In,
   Out,
   Inout,
@@ -381,17 +486,17 @@ enum CreateFunctionArgMode {
 
 
 impl Parseable for CreateFunctionArgMode {
-  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<CreateFunctionArgMode, ParseError> {
+  fn parse<'a, I: Ps<'a>>(_inp: I) -> Result<CreateFunctionArgMode, ParseError> {
     unimplemented!()
   }
 }
 
-#[derive(Debug)]
-struct CreateFunctionArg {
-  mode: Option<CreateFunctionArgMode>,
-  name: Option<TableIdent>,
-  ttype: Ttype,
-  default: Option<Expression>,
+#[derive(Debug, Clone)]
+pub struct CreateFunctionArg {
+  pub mode: Option<CreateFunctionArgMode>,
+  pub name: Option<TableIdent>,
+  pub ttype: Ttype,
+  pub default: Option<Expression>,
 }
 
 impl Parseable for CreateFunctionArg {
@@ -438,8 +543,8 @@ impl Parseable for CreateFunctionArg {
   }
 }
 
-#[derive(Debug)]
-enum CreateFunctionReturns {
+#[derive(Debug, Clone)]
+pub enum CreateFunctionReturns {
   Table(CreateTable),
   Ttype(Ttype),
   SetOf(Ttype),
@@ -461,30 +566,91 @@ impl Parseable for CreateFunctionReturns {
   }
 }
 
-#[derive(Debug)]
-enum CreateFunctionBody {
+#[derive(Debug, Clone)]
+pub enum SqlString {
+  Raw(String),
+  DollarQuoted(String, String),
+}
+
+impl SqlString {
+  fn contents(self) -> String {
+    match self {
+      SqlString::Raw(s) => s,
+      SqlString::DollarQuoted(_, s) => s,
+    }
+  }
+}
+
+impl Parseable for SqlString {
+  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<SqlString, ParseError> {
+    let t = inp.pop()?;
+    match t.as_rule() {
+      Rule::dollar_quoted => {
+        let mut inp = t.into_inner();
+        let t = inp.pop()?;
+        let p = match t.as_rule() {
+          Rule::dollar_quoted_start => t.as_str().to_owned(),
+          _ => unparseable!(t),
+        };
+        let t = inp.pop()?;
+        let contents = match t.as_rule() {
+          Rule::dollar_inners => t.as_str().to_owned(),
+          _ => unparseable!(t),
+        };
+        Ok(SqlString::DollarQuoted(p, contents))
+      }
+      _ => unparseable!(t),
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+pub enum CreateFunctionBody {
   AsDef(String),
-  Language(String),
+  ParsedAsDef(Document),
+  Language(Var),
 }
 
 impl Parseable for CreateFunctionBody {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<CreateFunctionBody, ParseError> {
     let t = inp.pop()?;
     Ok(match t.as_rule() {
-      Rule::create_function_body_as_def => CreateFunctionBody::AsDef(t.as_str().to_owned()),
-      Rule::create_function_body_language => CreateFunctionBody::Language(t.as_str().to_owned()),
+      Rule::create_function_body_as_def => {
+        let mut inp = t.into_inner();
+        let t = inp.pop()?;
+        match t.as_rule() {
+          Rule::string => {
+            let s = SqlString::parse(t.into_inner())?.contents();
+
+            match Document::parse(&s) {
+              Ok(inner) => CreateFunctionBody::ParsedAsDef(inner),
+              Err(e) => return Err(e),
+              // Err(_) => CreateFunctionBody::AsDef(s),
+            }
+          }
+          _ => unparseable!(t),
+        }
+      }
+      Rule::create_function_body_language => {
+        let mut inp = t.into_inner();
+        let t = inp.pop()?;
+        match t.as_rule() {
+          Rule::s_var => CreateFunctionBody::Language(Var::parse(t.into_inner())?),
+          _ => unparseable!(t),
+        }
+      }
       _ => unparseable!(t),
     })
   }
 }
 
-#[derive(Debug)]
-struct CreateFunction {
-  name: TableIdent,
-  or_replace: bool,
-  args: Vec<CreateFunctionArg>,
-  returns: CreateFunctionReturns,
-  body: Vec<CreateFunctionBody>,
+#[derive(Debug, Clone)]
+pub struct CreateFunction {
+  pub name: TableIdent,
+  pub or_replace: bool,
+  pub args: Vec<CreateFunctionArg>,
+  pub returns: CreateFunctionReturns,
+  pub body: Vec<CreateFunctionBody>,
 }
 
 impl Parseable for CreateFunction {
@@ -508,18 +674,15 @@ impl Parseable for CreateFunction {
       _ => unparseable!(t),
     }?;
     let t = inp.pop()?;
-    let returns = match t.as_rule() {
-      Rule::create_function_returns => CreateFunctionReturns::parse(t.into_inner()),
-      _ => unparseable!(t),
-    }?;
+    let returns = rule!(t, {
+      create_function_returns => CreateFunctionReturns::parse(t.into_inner())
+    })?;
     let t = inp.pop()?;
-    let body = match t.as_rule() {
-      Rule::create_function_body_list => a(t.into_inner().map(|t| match t.as_rule() {
-        Rule::create_function_body_item => CreateFunctionBody::parse(t.into_inner()),
-        _ => unparseable!(t),
-      })),
-      _ => unparseable!(t),
-    }?;
+    let body = rule!(t, {
+      create_function_body_list => a(t.into_inner().map(|t| rule!(t, {
+        create_function_body_item => CreateFunctionBody::parse(t.into_inner())
+      })))
+    })?;
 
     Ok(CreateFunction {
       name: name,
@@ -531,33 +694,46 @@ impl Parseable for CreateFunction {
   }
 }
 
-#[derive(Debug)]
-enum Statement {
+#[derive(Debug, Clone)]
+pub enum TransactionStmt {
+  Begin,
+  End,
+}
+
+impl Parseable for TransactionStmt {
+  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<TransactionStmt, ParseError> {
+    let t = inp.pop()?;
+    Ok(rule!(t, {
+      begin_stmt => TransactionStmt::Begin
+      end_stmt => TransactionStmt::End
+    }))
+  }
+}
+
+#[derive(Debug, Clone)]
+pub enum Statement {
   CreateTable(CreateTable),
   CreateSchema(CreateSchema),
   CreateFunction(CreateFunction),
   Select(Select),
+  Transaction(TransactionStmt),
 }
 
 impl Parseable for Statement {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Statement, ParseError> {
     let t = inp.pop()?;
-    match t.as_rule() {
-      Rule::create_table => CreateTable::parse(t.into_inner()).map(|c| Statement::CreateTable(c)),
-      Rule::create_schema => {
-        CreateSchema::parse(t.into_inner()).map(|c| Statement::CreateSchema(c))
-      }
-      Rule::create_function => {
-        CreateFunction::parse(t.into_inner()).map(|c| Statement::CreateFunction(c))
-      }
-      Rule::select_stmt => Select::parse(t.into_inner()).map(|c| Statement::Select(c)),
-      _ => unparseable!(t),
-    }
+    rule!(t, {
+      create_table => CreateTable::parse(t.into_inner()).map(|c| Statement::CreateTable(c))
+      create_schema => CreateSchema::parse(t.into_inner()).map(|c| Statement::CreateSchema(c))
+      create_function => CreateFunction::parse(t.into_inner()).map(|c| Statement::CreateFunction(c))
+      transaction_stmt => TransactionStmt::parse(t.into_inner()).map(|c| Statement::Transaction(c))
+      select_stmt => Select::parse(t.into_inner()).map(|c| Statement::Select(c))
+    })
   }
 }
 
-#[derive(Debug)]
-pub struct Document(Vec<Statement>);
+#[derive(Debug, Clone)]
+pub struct Document(pub Vec<Statement>);
 
 impl Document {
   pub fn parse(src: &str) -> Result<Document, ParseError> {
