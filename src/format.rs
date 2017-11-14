@@ -1,7 +1,12 @@
+use ast;
+use ast::*;
+
+#[derive(Debug, Clone)]
 pub struct Options {
   uppercase_keywords: bool,
   escape_names: bool,
   sort_table_columns: bool,
+  align_table_types: bool,
 }
 impl Default for Options {
   fn default() -> Options {
@@ -9,13 +14,22 @@ impl Default for Options {
       uppercase_keywords: true,
       escape_names: false,
       sort_table_columns: true,
+      align_table_types: true,
     }
   }
 }
+#[derive(Debug, Clone)]
 pub struct Context {
   options: Options,
+  field_name_length: usize,
 }
 impl Context {
+  fn field_name_length(&self, len: usize) -> Context {
+    Context {
+      field_name_length: len,
+      ..self.clone()
+    }
+  }
   fn keyword(&self, s: &str) -> String {
     if self.options.uppercase_keywords {
       s.to_uppercase()
@@ -67,6 +81,7 @@ impl Context {
 impl Default for Context {
   fn default() -> Context {
     Context {
+      field_name_length: 0,
       options: Options::default(),
     }
   }
@@ -87,8 +102,6 @@ fn format_join_by<T: Format, I: IntoIterator<Item = T>>(
     .collect::<Vec<_>>()
     .join(join_by)
 }
-
-use parser::*;
 
 impl<'a> Format for &'a Var {
   fn format(self, ctx: &Context) -> String {
@@ -144,10 +157,15 @@ impl<'a> Format for &'a ColumnConstraintReferences {
 }
 impl<'a> Format for &'a CreateTableField {
   fn format(self, ctx: &Context) -> String {
+    let space = (0..ctx.field_name_length - self.name.len() + 1)
+      .map(|_| " ")
+      .collect::<String>();
+
     match &self.constraints {
       &Some(ref constraints) => format!(
-        "{} {} {}",
+        "{}{}{} {}",
         self.name.format(ctx),
+        space,
         self.ttype.format(ctx),
         format_join_by(constraints, " ", ctx)
       ),
@@ -163,15 +181,18 @@ impl<'a> Format for &'a CreateTable {
       fields.sort_by(|a, b| a.name.partial_cmp(&b.name).unwrap())
     };
 
+    let longest_field_name = fields.iter().fold(0, |max, f| max.max(f.name.len()));
+    let ctx = ctx.field_name_length(longest_field_name);
+
     format!(
-      "{} {} (\n{}\n)",
+      "{} {}\n  ( {}\n  )",
       ctx.keyword("create table"),
-      self.name.format(ctx),
+      self.name.format(&ctx),
       fields
         .iter()
-        .map(|l| format!("  {}", l.format(ctx)))
+        .map(|l| format!("{}", l.format(&ctx)))
         .collect::<Vec<_>>()
-        .join(",\n")
+        .join("\n  , ")
     )
   }
 }
@@ -218,10 +239,10 @@ impl<'a> Format for &'a CreateFunctionArg {
 impl<'a> Format for &'a CreateFunction {
   fn format(self, ctx: &Context) -> String {
     format!(
-      "{} {}({}) {} {}",
+      "{} {}\n  ( {}\n  )\n{} {}",
       ctx.keyword("create function"),
       self.name.format(ctx),
-      format_join_by(&self.args, ", ", ctx),
+      format_join_by(&self.args, "\n  , ", ctx),
       format!("{} {}", ctx.keyword("returns"), self.returns.format(ctx)),
       format_join_by(&self.body, "\n", ctx)
     )
@@ -231,12 +252,13 @@ impl<'a> Format for &'a Expression {
   fn format(self, ctx: &Context) -> String {
     match self {
       &Expression::FunctionCall(ref fncall) => fncall.format(ctx),
+      &Expression::Ref(ref r) => r.format(ctx),
     }
   }
 }
 impl<'a> Format for &'a ColumnConstraintReferencesMatch {
   fn format(self, ctx: &Context) -> String {
-    use parser::ColumnConstraintReferencesMatch::*;
+    use ast::ColumnConstraintReferencesMatch::*;
     match self {
       &Full => ctx.keyword("full"),
       &Partial => ctx.keyword("partial"),
@@ -246,7 +268,7 @@ impl<'a> Format for &'a ColumnConstraintReferencesMatch {
 }
 impl<'a> Format for &'a ColumnConstraint {
   fn format(self, ctx: &Context) -> String {
-    use parser::ColumnConstraint::*;
+    use ast::ColumnConstraint::*;
     match self {
       &NotNull => ctx.keyword("not null"),
       &Null => unimplemented!(),
@@ -315,7 +337,7 @@ impl<'a> Format for &'a SqlString {
 }
 impl<'a> Format for &'a CreateFunctionBody {
   fn format(self, ctx: &Context) -> String {
-    use parser::CreateFunctionBody::*;
+    use ast::CreateFunctionBody::*;
     match self {
       &AsDef(_) => unimplemented!(),
       &ParsedAsDef(ref doc) => format!(
@@ -342,7 +364,7 @@ impl<'a> Format for &'a TransactionStmt {
 }
 impl<'a> Format for &'a Statement {
   fn format(self, ctx: &Context) -> String {
-    use parser::Statement::*;
+    use ast::Statement::*;
     match self {
       &CreateTable(ref stmt) => stmt.format(ctx),
       &CreateSchema(ref stmt) => stmt.format(ctx),

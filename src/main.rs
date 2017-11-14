@@ -6,12 +6,13 @@ extern crate pest_derive;
 
 mod parser;
 mod format;
+mod ast;
 
 use format::Format;
 
 fn prettify(s: &str, _options: Option<format::Options>) -> Result<String, parser::ParseError> {
     let ctx = format::Context::default();
-    Ok(parser::Document::parse(&s)?.format(&ctx))
+    Ok(parser::parse(&s)?.format(&ctx))
 }
 
 fn main() {

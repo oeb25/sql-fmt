@@ -5,6 +5,8 @@ use pest::Parser;
 #[grammar = "sql.pest"]
 pub struct IdentParser;
 
+use ast::*;
+
 #[derive(Debug, Clone)]
 pub enum ParseError {
   Dunno,
@@ -69,28 +71,6 @@ trait Parseable: Sized {
   fn parse<'a, I: Ps<'a>>(inp: I) -> Result<Self, ParseError>;
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum Var {
-  Raw(String),
-  Escaped(String),
-}
-use std;
-
-impl Var {
-  fn contents<'a>(&'a self) -> &'a str {
-    match self {
-      &Var::Raw(ref s) => s,
-      &Var::Escaped(ref s) => s,
-    }
-  }
-}
-
-impl std::cmp::PartialOrd for Var {
-  fn partial_cmp(&self, b: &Var) -> Option<std::cmp::Ordering> {
-    self.contents().partial_cmp(b.contents())
-  }
-}
-
 impl Parseable for Var {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Var, ParseError> {
     let t = inp.pop()?;
@@ -103,12 +83,6 @@ impl Parseable for Var {
       var => Var::Raw(t.as_str().to_owned())
     }))
   }
-}
-
-#[derive(Debug, Clone)]
-pub struct TableIdent {
-  pub schema: Option<Var>,
-  pub name: Var,
 }
 
 impl Parseable for TableIdent {
@@ -131,12 +105,6 @@ impl Parseable for TableIdent {
   }
 }
 
-#[derive(Debug, Clone)]
-pub struct Ttype {
-  pub schema: Option<Var>,
-  pub name: Var,
-}
-
 impl Parseable for Ttype {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Ttype, ParseError> {
     let t = inp.pop()?;
@@ -155,12 +123,6 @@ impl Parseable for Ttype {
       _ => unparseable!(t),
     })
   }
-}
-
-#[derive(Debug, Clone)]
-pub struct FunctionCall {
-  pub base: TableIdent,
-  pub args: Option<Vec<Expression>>,
 }
 
 impl Parseable for FunctionCall {
@@ -196,11 +158,6 @@ impl Parseable for FunctionCall {
   }
 }
 
-#[derive(Debug, Clone)]
-pub enum Expression {
-  FunctionCall(FunctionCall),
-}
-
 impl Parseable for Expression {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Expression, ParseError> {
     let t = inp.pop()?;
@@ -208,22 +165,11 @@ impl Parseable for Expression {
       function_call => {
         FunctionCall::parse(t.into_inner()).map(|c| Expression::FunctionCall(c))
       }
+      table_ident => {
+        TableIdent::parse(t.into_inner()).map(|c| Expression::Ref(c))
+      }
     })
   }
-}
-
-#[derive(Debug, Clone)]
-pub enum ColumnConstraintReferencesMatch {
-  Full,
-  Partial,
-  Simple,
-}
-
-#[derive(Debug, Clone)]
-pub struct ColumnConstraintReferences {
-  pub table: TableIdent,
-  pub column: Option<Var>,
-  pub mmatch: Option<ColumnConstraintReferencesMatch>,
 }
 
 impl Parseable for ColumnConstraintReferences {
@@ -258,17 +204,6 @@ impl Parseable for ColumnConstraintReferences {
   }
 }
 
-#[derive(Debug, Clone)]
-pub enum ColumnConstraint {
-  NotNull,
-  Null,
-  Check,
-  Default(Expression),
-  Unique,
-  PrimaryKey,
-  References(ColumnConstraintReferences),
-}
-
 impl Parseable for ColumnConstraint {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<ColumnConstraint, ParseError> {
     let t = inp.pop()?;
@@ -292,13 +227,6 @@ impl Parseable for ColumnConstraint {
       _ => unparseable!(t),
     })
   }
-}
-
-#[derive(Debug, Clone)]
-pub struct CreateTableField {
-  pub name: Var,
-  pub ttype: Ttype,
-  pub constraints: Option<Vec<ColumnConstraint>>,
 }
 
 impl Parseable for CreateTableField {
@@ -336,13 +264,6 @@ impl Parseable for CreateTableField {
   }
 }
 
-#[derive(Debug, Clone)]
-pub struct CreateTable {
-  pub name: TableIdent,
-  pub if_not_exsists: bool,
-  pub fields: Vec<CreateTableField>,
-}
-
 impl Parseable for CreateTable {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<CreateTable, ParseError> {
     let t = inp.pop()?;
@@ -365,18 +286,6 @@ impl Parseable for CreateTable {
       fields: fields,
     })
   }
-}
-
-#[derive(Debug, Clone)]
-pub enum ExprOrAll {
-  All,
-  Expression(Expression),
-}
-
-#[derive(Debug, Clone)]
-pub struct SelectClauseItem {
-  pub expr_or_all: ExprOrAll,
-  pub ass: Option<String>,
 }
 
 impl Parseable for SelectClauseItem {
@@ -404,20 +313,12 @@ impl Parseable for SelectClauseItem {
   }
 }
 
-#[derive(Debug, Clone)]
-pub struct SelectClause(pub Vec<SelectClauseItem>);
-
 impl Parseable for SelectClause {
   fn parse<'a, I: Ps<'a>>(inp: I) -> Result<SelectClause, ParseError> {
     Ok(SelectClause(
       a(inp.map(|t| SelectClauseItem::parse(t.into_inner())))?,
     ))
   }
-}
-
-#[derive(Debug, Clone)]
-pub enum FromClause {
-  Table(TableIdent),
 }
 
 impl Parseable for FromClause {
@@ -436,12 +337,6 @@ impl Parseable for FromClause {
       _ => unparseable!(t),
     })
   }
-}
-
-#[derive(Debug, Clone)]
-pub struct Select {
-  pub clause: SelectClause,
-  pub from: FromClause,
 }
 
 impl Parseable for Select {
@@ -465,9 +360,6 @@ impl Parseable for Select {
   }
 }
 
-#[derive(Debug, Clone)]
-pub struct CreateSchema(pub Var);
-
 impl Parseable for CreateSchema {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<CreateSchema, ParseError> {
     let t = inp.pop()?;
@@ -475,28 +367,10 @@ impl Parseable for CreateSchema {
   }
 }
 
-#[derive(Debug, Clone)]
-pub enum CreateFunctionArgMode {
-  In,
-  Out,
-  Inout,
-  Variadic,
-}
-
-
-
 impl Parseable for CreateFunctionArgMode {
   fn parse<'a, I: Ps<'a>>(_inp: I) -> Result<CreateFunctionArgMode, ParseError> {
     unimplemented!()
   }
-}
-
-#[derive(Debug, Clone)]
-pub struct CreateFunctionArg {
-  pub mode: Option<CreateFunctionArgMode>,
-  pub name: Option<TableIdent>,
-  pub ttype: Ttype,
-  pub default: Option<Expression>,
 }
 
 impl Parseable for CreateFunctionArg {
@@ -543,13 +417,6 @@ impl Parseable for CreateFunctionArg {
   }
 }
 
-#[derive(Debug, Clone)]
-pub enum CreateFunctionReturns {
-  Table(CreateTable),
-  Ttype(Ttype),
-  SetOf(Ttype),
-}
-
 impl Parseable for CreateFunctionReturns {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<CreateFunctionReturns, ParseError> {
     let t = inp.pop()?;
@@ -564,12 +431,6 @@ impl Parseable for CreateFunctionReturns {
       _ => unparseable!(t),
     }
   }
-}
-
-#[derive(Debug, Clone)]
-pub enum SqlString {
-  Raw(String),
-  DollarQuoted(String, String),
 }
 
 impl SqlString {
@@ -604,13 +465,6 @@ impl Parseable for SqlString {
   }
 }
 
-#[derive(Debug, Clone)]
-pub enum CreateFunctionBody {
-  AsDef(String),
-  ParsedAsDef(Document),
-  Language(Var),
-}
-
 impl Parseable for CreateFunctionBody {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<CreateFunctionBody, ParseError> {
     let t = inp.pop()?;
@@ -622,7 +476,7 @@ impl Parseable for CreateFunctionBody {
           Rule::string => {
             let s = SqlString::parse(t.into_inner())?.contents();
 
-            match Document::parse(&s) {
+            match parse(&s) {
               Ok(inner) => CreateFunctionBody::ParsedAsDef(inner),
               Err(e) => return Err(e),
               // Err(_) => CreateFunctionBody::AsDef(s),
@@ -642,15 +496,6 @@ impl Parseable for CreateFunctionBody {
       _ => unparseable!(t),
     })
   }
-}
-
-#[derive(Debug, Clone)]
-pub struct CreateFunction {
-  pub name: TableIdent,
-  pub or_replace: bool,
-  pub args: Vec<CreateFunctionArg>,
-  pub returns: CreateFunctionReturns,
-  pub body: Vec<CreateFunctionBody>,
 }
 
 impl Parseable for CreateFunction {
@@ -694,12 +539,6 @@ impl Parseable for CreateFunction {
   }
 }
 
-#[derive(Debug, Clone)]
-pub enum TransactionStmt {
-  Begin,
-  End,
-}
-
 impl Parseable for TransactionStmt {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<TransactionStmt, ParseError> {
     let t = inp.pop()?;
@@ -708,15 +547,6 @@ impl Parseable for TransactionStmt {
       end_stmt => TransactionStmt::End
     }))
   }
-}
-
-#[derive(Debug, Clone)]
-pub enum Statement {
-  CreateTable(CreateTable),
-  CreateSchema(CreateSchema),
-  CreateFunction(CreateFunction),
-  Select(Select),
-  Transaction(TransactionStmt),
 }
 
 impl Parseable for Statement {
@@ -732,24 +562,19 @@ impl Parseable for Statement {
   }
 }
 
-#[derive(Debug, Clone)]
-pub struct Document(pub Vec<Statement>);
-
-impl Document {
-  pub fn parse(src: &str) -> Result<Document, ParseError> {
-    let t = IdentParser::parse_str(Rule::document, src)
-      .unwrap_or_else(|e| panic!("{}", e))
-      .next()
-      .unwrap();
-    match t.as_rule() {
-      Rule::document => Ok(Document(
-        a(t.into_inner().filter_map(|t| match t.as_rule() {
-          Rule::stmt => Some(Statement::parse(t.into_inner())),
-          Rule::comment => None,
-          _ => unreachable!("{:?}", t),
-        }))?,
-      )),
-      _ => unparseable!(t),
-    }
+pub fn parse(src: &str) -> Result<Document, ParseError> {
+  let t = IdentParser::parse_str(Rule::document, src)
+    .unwrap_or_else(|e| panic!("{}", e))
+    .next()
+    .unwrap();
+  match t.as_rule() {
+    Rule::document => Ok(Document(
+      a(t.into_inner().filter_map(|t| match t.as_rule() {
+        Rule::stmt => Some(Statement::parse(t.into_inner())),
+        Rule::comment => None,
+        _ => unreachable!("{:?}", t),
+      }))?,
+    )),
+    _ => unparseable!(t),
   }
 }

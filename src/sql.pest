@@ -29,7 +29,7 @@ string = { dollar_quoted }
 function_name = { table_ident }
 function_arguments = { expr ~ ("," ~ expr)* }
 function_call = { function_name ~ "(" ~ function_arguments? ~ ")" }
-expr = { function_call }
+expr = { function_call | table_ident }
 
 // Create Statement
 

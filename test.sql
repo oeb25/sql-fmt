@@ -2,7 +2,7 @@ CREATE SCHEMA users;
 
 CREATE TABLE users.users (
   user_id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  full_name TEXT NOT NULL,
+  full_name TEXT DEFAULT create_user(ifull_name, iemail, ifacebook_id, ipicture_url),
   email TEXT NOT NULL,
   facebook_id TEXT UNIQUE NOT NULL,
   account_id UUID NOT NULL REFERENCES transactions.accounts (account_id),
