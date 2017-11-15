@@ -3,17 +3,15 @@
 alpha = _{ 'a'..'z' | 'A'..'Z' }
 digit = _{ '0'..'9' }
 
-float = _{ digit+ ~ "." ~ digit+ }
-
 whitespace = _{ " " | "\t" | "\r" | "\n" }
 
 var = @{ ("_" | alpha) ~ ("_" | alpha | digit)* }
 
 // MIXED
 
-escaped_var = @{ "`" ~ var ~ "`" }
+escaped_var = @{ "\"" ~ var ~ "\"" }
 s_var = { escaped_var | var }
-schema_specifed = { s_var ~ "." ~ s_var }
+schema_specifed = { s_var ~ "." ~ (all | s_var) }
 table_ident = { schema_specifed | s_var }
 ttype = { schema_specifed | s_var }
 setof = { ^"setof" ~ ttype }
@@ -22,14 +20,26 @@ action = { "TODO" }
 dollar_quoted_start = @{ "$" ~ (!"$" ~ any)* ~ "$" }
 dollar_inners = { (!peek ~ any)* }
 dollar_quoted = { push(dollar_quoted_start) ~ dollar_inners ~ pop }
-string = { dollar_quoted }
+single_quoted = { "'" ~ (!"'" ~ any)* ~ "'" }
+string = ${ dollar_quoted | single_quoted }
+
+int = { digit+ }
+float = { int ~ "." ~ int }
+number = ${ float | int }
+
+keyword = { ^"returning" }
 
 // Expression
 
+cast = { ^"cast" ~ "(" ~ expr ~ ^"as" ~ ttype ~ ")" }
 function_name = { table_ident }
 function_arguments = { expr ~ ("," ~ expr)* }
 function_call = { function_name ~ "(" ~ function_arguments? ~ ")" }
-expr = { function_call | table_ident }
+term = { ("(" ~ expr ~ ")") | cast | number | string | select_stmt | insert_stmt | function_call | table_ident }
+expr_infix = { operator ~ expr }
+expr_opr = { expr_infix* }
+as_infix = { ^"::" ~ ttype }
+expr = { term ~ expr_opr ~ as_infix? }
 
 // Create Statement
 
@@ -44,7 +54,20 @@ column_not_null = { ^"not" ~ ^"null" }
 column_null = { ^"null" }
 column_check = { ^"check" ~ expr }
 column_default = { ^"default" ~ expr }
-column_unique = { ^"unique" ~ (column_index_parameters)? }
+
+column_unique = { ^"unique" ~ column_index_parameters? }
+column_exclude_using = { ^"using" ~ table_ident }
+
+operator_eq = { "=" }
+operator_and = { "&&" }
+operator_add = { "+" }
+operator = { operator_eq | operator_and | operator_add }
+// { column_name | ( expression ) } [ opclass ] [ ASC | DESC ] [ NULLS { FIRST | LAST } ]
+column_exclude_elm = { expr }
+column_exclude_item = { column_exclude_elm ~ ^"with" ~ operator }
+column_exclude_list = { column_exclude_item ~ ("," ~ column_exclude_item)* }
+column_exclude = { ^"exclude" ~ (column_exclude_using)? ~ "(" ~ column_exclude_list ~ ")" }
+
 column_primary_key = { ^"primary" ~ ^"key" ~ (column_index_parameters)? }
 column_references_match_full = { ^"match" ~ ^"full" }
 column_references_match_partial = { ^"match" ~ ^"partial" }
@@ -76,11 +99,16 @@ column_constraint = {
 }
 column_constraints = { column_constraint ~ (column_constraint)* }
 
-create_table_item = { s_var ~ ttype ~ collate? ~ column_constraints? }
-create_table_body = _{ create_table_item ~ ("," ~ create_table_item)* }
+create_table_column = { s_var ~ ttype ~ collate? ~ column_constraints? }
+create_table_unique = { ^"unique" ~ "(" ~ s_var ~ ("," ~ s_var)* ~ ")" }
+create_table_item = { create_table_unique | column_exclude | create_table_column }
+create_table_body = { create_table_item ~ ("," ~ create_table_item)* }
+create_table_inherits = { ^"inherits" ~ "(" ~ table_ident ~ ")" }
 create_table = { ^"table" ~ if_not_exists? ~ table_ident ~ "(" ~
-  create_table_item ~ ("," ~ create_table_item)* ~
-")" }
+  create_table_body ~
+")" ~ create_table_inherits? }
+
+// Create Function
 
 create_function_arg_mode_in = { ^"in" }
 create_function_arg_mode_out = { ^"out" }
@@ -112,32 +140,71 @@ create_function = {
   create_function_body_list
 }
 
-create_view = { ^"view" ~ table_ident }
+create_view = { ^"view" ~ table_ident ~ ^"as" ~ select_stmt }
 create_schema = { ^"schema" ~ s_var }
 create_stmt = _{ ^"create" ~ (create_table | create_view | create_schema | create_function) }
 
 // Transaction Statements
 
 begin_stmt = { ^"begin" }
-end_stmt = { ^"end" ~ ";" }
+end_stmt = { ^"end" }
 transaction_stmt = { begin_stmt | end_stmt }
+
+// With
+
+with_item = { s_var ~ ^"as" ~ expr }
+with = { ^"with" ~ with_item ~ ("," ~ with_item)* }
 
 // Select Statement
 
 all = { "*" }
 
-select_with_query = { "TODO" }
-select_with = { ^"with" ~ select_with_query }
-select_clause_item = { (all | expr) ~ (^"as" ~ var)? }
+select_clause_item = { (all | expr) ~ (^"as" ~ s_var)? }
 select_clause = { select_clause_item ~ ("," ~ select_clause_item)* }
-select_from_item = { table_ident }
-select_from = { ^"from" ~ select_from_item }
+select_from_item = { expr ~ ^"as"? ~ (!keyword ~ s_var)? }
+select_from = { ^"from" ~ (select_from_item ~ ("," ~ select_from_item)*) }
 select_where = { ^"where" ~ select_from_item }
 
-select_stmt = { select_with? ~ ^"select" ~ select_clause ~ select_from? ~ select_where? }
+select_stmt = { with? ~ ^"select" ~ select_clause ~ select_from? ~ select_where? }
+
+// Insert Statement
+
+default_lit = { ^"default" }
+
+insert_columns = { "(" ~ s_var ~ ("," ~ s_var)* ~ ")" }
+insert_default = { default_lit ~ ^"values" }
+insert_values_item = { default_lit | expr }
+insert_values = { ^"values" ~ "(" ~ insert_values_item ~ ("," ~ insert_values_item)* ~ ")" }
+
+
+insert_conflict_target = { "(" ~ s_var ~ ("," ~ s_var)* ~ ")" }
+insert_conflict = { ^"on" ~ ^"conflict" ~ insert_conflict_target? ~ insert_conflict_action }
+
+insert_conflict_action_update_one = { s_var ~ "=" ~ (default_lit | expr) }
+insert_conflict_action_update_more_target = { s_var ~ ("," ~ s_var)* }
+insert_conflict_action_update_more_from = { (default_lit | expr) ~ ("," ~ (default_lit | expr))* }
+insert_conflict_action_update_more = { "(" ~ insert_conflict_action_update_more_target ~ ")" ~ "=" ~ "(" ~ insert_conflict_action_update_more_from ~ ")" }
+insert_conflict_action_update_select = { "(" ~ insert_conflict_action_update_more_target ~ ")" ~ "=" ~ "(" ~ select_stmt ~ ")" }
+
+insert_conflict_action_nothing = { ^"do" ~ ^"nothing" }
+insert_conflict_action_update_item = { insert_conflict_action_update_one | insert_conflict_action_update_more | insert_conflict_action_update_select }
+insert_conflict_action_update = { ^"do" ~ ^"update" ~ ^"set" ~ insert_conflict_action_update_item ~ ("," ~ insert_conflict_action_update_item)* }
+insert_conflict_action = { insert_conflict_action_nothing | insert_conflict_action_update }
+
+insert_return = { ^"returning" ~ all }
+
+insert_stmt = { with? ~ ^"insert" ~ ^"into" ~ table_ident ~
+  insert_columns? ~
+  (insert_default | insert_values | select_stmt) ~
+  insert_conflict? ~
+  insert_return?
+}
 
 // Statement
 
+ret_query = { ^"query" ~ expr }
+ret_stmt = { ^"return" ~ (ret_query | expr) }
+ 
 comment = {
   // line comment
   "--" ~ ((!("\n") ~ any)* ~ ("\n" | eoi)) |
@@ -145,7 +212,7 @@ comment = {
   "/*" ~ (!"*/" ~ any)*
 }
 
-stmt = { create_stmt | select_stmt | transaction_stmt }
+stmt = { ret_stmt | create_stmt | select_stmt | insert_stmt | transaction_stmt }
 
 document = {
   soi ~

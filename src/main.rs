@@ -1,9 +1,11 @@
 #![feature(try_from)]
+#![feature(match_default_bindings)]
 
 extern crate pest;
 #[macro_use]
 extern crate pest_derive;
 
+mod keywords;
 mod parser;
 mod format;
 mod ast;
@@ -27,8 +29,5 @@ fn main() {
     let a = prettify(&d, None).unwrap();
     println!("{}", a);
 
-    let b = prettify(&a, None).unwrap();
-    println!("{}", b);
-
-    assert_eq!(a, b);
+    debug_assert_eq!(a, prettify(&a, None).unwrap());
 }
