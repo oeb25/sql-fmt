@@ -1,0 +1,13 @@
+{
+  "devDependencies": {
+    "http-server": "^0.10.0",
+    "wargo": "^0.5.0",
+    "wargo-loader": "^0.3.0",
+    "webpack": "^3.7.1"
+  },
+  "scripts": {
+    "build": "wargo build --release && npm run compile",
+    "compile": "webpack --progress",
+    "serve": "http-server"
+  }
+}

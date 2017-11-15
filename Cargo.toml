@@ -6,3 +6,11 @@ authors = ["oeb25 <oliverboving@gmail.com>"]
 [dependencies]
 pest = "^1.0.0-beta"
 pest_derive = "^1.0.0-beta"
+
+[lib]
+name = "sql_fmt"
+path = "src/lib.rs"
+
+# [[bin]]
+# name = "cli"
+# path = "src/bin/cli.rs"

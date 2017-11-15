@@ -288,14 +288,18 @@ impl<'a> Format for &'a CreateTable {
     let ctx = ctx.field_type_length(longest_field_type);
 
     format!(
-      "{} {}\n  ( {}\n  )",
+      "{} {}\n  ( {}\n  ){}",
       ctx.keyword("create table"),
       self.name.format(&ctx),
       fields
         .iter()
         .map(|l| format!("{}", l.format(&ctx)))
         .collect::<Vec<_>>()
-        .join("\n  , ")
+        .join("\n  , "),
+      match self.inherits {
+        Some(ref t) => format!(" {} ({})", ctx.keyword("inherits"), t.format(&ctx)),
+        None => "".to_owned(),
+      }
     )
   }
 }

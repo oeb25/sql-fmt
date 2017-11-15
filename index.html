@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <title>Document</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+    }
+
+    div {
+      display: flex;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    textarea {
+      flex: 1;
+      resize: none;
+      padding: 1em;
+    }
+  </style>
+</head>
+
+<body>
+  <div>
+    <textarea spellcheck="false" id="input"></textarea>
+    <textarea spellcheck="false" id="output"></textarea>
+  </div>
+  <script src="build/bundle.js"></script>
+  <script>
+    window.init = function init() {
+      const input = document.getElementById("input");
+      const output = document.getElementById("output");
+      let timeout = 0
+      input.addEventListener('keyup', () => {
+        clearTimeout(timeout)
+        timeout = setTimeout(() => {
+          requestAnimationFrame(() => output.value = window.prettify(input.value))
+        }, 500)
+      })
+    }
+  </script>
+</body>
+
+</html>
