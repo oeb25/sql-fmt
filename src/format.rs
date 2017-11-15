@@ -178,22 +178,28 @@ impl<'a> Format for &'a ColumnConstraintReferences {
   }
 }
 impl<'a> Format for &'a Operator {
-  fn format(self, _ctx: &Arc<Context>) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
-      Operator::And => "&&",
-      Operator::Equal => "=",
-      Operator::Add => "+",
-      Operator::As => "::",
-    }.to_owned()
+      Operator::And => "&&".to_owned(),
+      Operator::Equal => "=".to_owned(),
+      Operator::Add => "+".to_owned(),
+      Operator::As => "::".to_owned(),
+      Operator::AndLit => ctx.keyword("and"),
+      Operator::OrLit => ctx.keyword("or"),
+      Operator::Greater => ">".to_owned(),
+      Operator::Less => "<".to_owned(),
+      Operator::GreaterEqual => ">=".to_owned(),
+      Operator::LessEqual => "<=".to_owned(),
+    }
   }
 }
 impl<'a> Format for &'a CreateTableExcludeWith {
   fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{} {} {}",
-      (self.0).0.format(ctx),
+      self.0.format(ctx),
       ctx.keyword("with"),
-      (self.0).1.format(ctx)
+      self.1.format(ctx)
     )
   }
 }
@@ -325,7 +331,7 @@ impl<'a> Format for &'a Select {
     });
     let ctx = Arc::new(ctx.select_expr_length(longest_select_expr));
     format!(
-      "{with}{select} {clause}\n  {from}",
+      "{with}{select} {clause}{from}{where}",
       with = match self.with {
         Some(ref with) => format!("{}\n", with.format(&ctx)),
         None => "".to_owned(),
@@ -334,9 +340,17 @@ impl<'a> Format for &'a Select {
       clause = format_join_by(&self.clause.0, "\n     , ", &ctx),
       from = match self.from {
         Some(ref from) => format!(
-          "{} {}",
+          "\n  {} {}",
           ctx.keyword("from"),
           format_join_by(from, "\n     , ", &ctx)
+        ),
+        None => "".to_owned(),
+      },
+      where = match self.condition {
+        Some(ref condition) => format!(
+          "\n {} {}",
+          ctx.keyword("where"),
+          condition.format(&ctx),
         ),
         None => "".to_owned(),
       }

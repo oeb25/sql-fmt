@@ -180,12 +180,12 @@ impl CreateTableColumn {
       Some(ref constraints) => for c in constraints {
         match c {
           ColumnConstraint::PrimaryKey => return true,
-          _ => ()
+          _ => (),
         }
       },
-      None => ()
+      None => (),
     }
-    
+
     false
   }
   pub fn is_not_null(&self) -> bool {
@@ -194,12 +194,12 @@ impl CreateTableColumn {
         match c {
           ColumnConstraint::NotNull => return true,
           ColumnConstraint::Null => return false,
-          _ => ()
+          _ => (),
         }
       },
-      None => ()
+      None => (),
     }
-    
+
     false
   }
 }
@@ -210,10 +210,16 @@ pub enum Operator {
   And,
   Add,
   As,
+  AndLit,
+  OrLit,
+  Greater,
+  Less,
+  GreaterEqual,
+  LessEqual,
 }
 
 #[derive(Debug, Clone)]
-pub struct CreateTableExcludeWith(pub (Expression, Operator));
+pub struct CreateTableExcludeWith(pub Expression, pub Operator);
 
 #[derive(Debug, Clone)]
 pub struct CreateTableExclude {
@@ -247,6 +253,7 @@ pub struct Select {
   pub with: Option<With>,
   pub clause: SelectClause,
   pub from: Option<Vec<FromClause>>,
+  pub condition: Option<Expression>,
 }
 
 #[derive(Debug, Clone)]

@@ -36,10 +36,21 @@ function_name = { table_ident }
 function_arguments = { expr ~ ("," ~ expr)* }
 function_call = { function_name ~ "(" ~ function_arguments? ~ ")" }
 term = { ("(" ~ expr ~ ")") | cast | number | string | select_stmt | insert_stmt | function_call | table_ident }
-expr_infix = { operator ~ expr }
-expr_opr = { expr_infix* }
 as_infix = { ^"::" ~ ttype }
-expr = { term ~ expr_opr ~ as_infix? }
+
+primary_operator = _{ operator_mul | operator_div }
+primary = { term ~ (primary_operator ~ term)* }
+
+addative_operator = _{ operator_add | operator_sub }
+addative = { primary ~ (addative_operator ~ primary)* }
+
+equality_operator = _{ operator_eq | operator_and | operator_lte | operator_gte | operator_lt | operator_gt }
+equality = { addative ~ (equality_operator ~ addative)* }
+
+binding_operator = _{ and_lit | or_lit }
+binding = { equality ~ (binding_operator ~ equality)* }
+
+expr = { binding ~ as_infix? }
 
 // Create Statement
 
@@ -58,10 +69,20 @@ column_default = { ^"default" ~ expr }
 column_unique = { ^"unique" ~ column_index_parameters? }
 column_exclude_using = { ^"using" ~ table_ident }
 
+and_lit = { ^"and" }
+or_lit = { ^"or" }
+
 operator_eq = { "=" }
 operator_and = { "&&" }
 operator_add = { "+" }
-operator = { operator_eq | operator_and | operator_add }
+operator_sub = { "-" }
+operator_lte = { "<=" }
+operator_gte = { ">=" }
+operator_lt = { "<" }
+operator_gt = { ">" }
+operator_mul = { "*" }
+operator_div = { "/" }
+operator = { operator_eq | operator_and | operator_add | and_lit | or_lit | operator_lte | operator_gte | operator_lt| operator_gt }
 // { column_name | ( expression ) } [ opclass ] [ ASC | DESC ] [ NULLS { FIRST | LAST } ]
 column_exclude_elm = { expr }
 column_exclude_item = { column_exclude_elm ~ ^"with" ~ operator }
@@ -163,7 +184,7 @@ select_clause_item = { (all | expr) ~ (^"as" ~ s_var)? }
 select_clause = { select_clause_item ~ ("," ~ select_clause_item)* }
 select_from_item = { expr ~ ^"as"? ~ (!keyword ~ s_var)? }
 select_from = { ^"from" ~ (select_from_item ~ ("," ~ select_from_item)*) }
-select_where = { ^"where" ~ select_from_item }
+select_where = { ^"where" ~ expr }
 
 select_stmt = { with? ~ ^"select" ~ select_clause ~ select_from? ~ select_where? }
 

@@ -39,8 +39,8 @@ fn a<T, I: Iterator<Item = Result<T, ParseError>>>(a: I) -> Result<Vec<T>, Parse
 
 trait Ps<'a>: Iterator<Item = P<'a>> {
   fn pop(&mut self) -> Result<P<'a>, ParseError> {
-    // self.next().ok_or(ParseError::Dunno)
-    Ok(self.next().ok_or(ParseError::Dunno).unwrap())
+    self.next().ok_or(ParseError::Dunno)
+    // Ok(self.next().ok_or(ParseError::Dunno).unwrap())
   }
   fn pop_comments(&mut self) -> Result<P<'a>, ParseError> {
     self.pop().and_then(|t| match t.as_rule() {
@@ -59,7 +59,7 @@ where
 macro_rules! unparseable {
     ($fmt:expr) => ({
         // unreachable!("{:?} : {}:{}", $fmt, file!(), line!())
-        return Err(ParseError::Unparseable(format!("{:?} : {}:{}", $fmt, file!(), line!())))
+        return Err(ParseError::Unparseable(format!("{:?} : {}:{} -> {}", $fmt, file!(), line!(), $fmt.as_str())))
     });
 }
 
@@ -76,6 +76,17 @@ macro_rules! rule {
 
 trait Parseable: Sized {
   fn parse<'a, I: Ps<'a>>(inp: I) -> Result<Self, ParseError>;
+}
+
+trait ParseOne: Sized {
+  fn parse_one<'a>(t: P<'a>) -> Result<Self, ParseError>;
+}
+
+impl<T> Parseable for T where T: ParseOne {
+  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Self, ParseError> {
+    let t = inp.pop()?;
+    Self::parse_one(t)
+  }
 }
 
 impl Parseable for Var {
@@ -189,9 +200,8 @@ impl Parseable for Cast {
   }
 }
 
-impl Parseable for Number {
-  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Number, ParseError> {
-    let t = inp.pop()?;
+impl ParseOne for Number {
+  fn parse_one<'a>(t: P<'a>) -> Result<Number, ParseError> {
     Ok(match t.as_rule() {
       Rule::float => Number::Float(t.as_str().parse().unwrap()),
       Rule::int => Number::Int(t.as_str().parse().unwrap()),
@@ -203,88 +213,56 @@ impl Parseable for Number {
 impl Parseable for Expression {
   fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Expression, ParseError> {
     let t = inp.pop()?;
-    let lhs = match t.as_rule() {
-      Rule::expr | Rule::term => {
-        let mut inp = t.into_inner();
-        let t = inp.pop()?;
-        match t.as_rule(){
-          Rule::number => {
-            Number::parse(t.into_inner()).map(|c| Expression::Number(c))
-          }
-          Rule::term => {
-            Expression::parse(t.into_inner())
-          }
-          Rule::expr => {
-            Expression::parse(t.into_inner())
-          }
-          Rule::cast => {
-            Cast::parse(t.into_inner()).map(|c| Expression::Cast(Box::new(c)))
-          }
-          Rule::string => {
-            SqlString::parse(t.into_inner()).map(|c| Expression::String(c))
-          }
-          Rule::function_call => {
-            FunctionCall::parse(t.into_inner()).map(|c| Expression::FunctionCall(c))
-          }
-          Rule::table_ident => {
-            TableIdent::parse(t.into_inner()).map(|c| Expression::Ref(c))
-          }
-          Rule::select_stmt => {
-            Select::parse(t.into_inner()).map(|c| Expression::Select(Box::new(c)))
-          }
-          Rule::insert_stmt => {
-            InsertStmt::parse(t.into_inner()).map(|c| Expression::Insert(c))
-          }
-          _ => unparseable!(t)
-        }
+    let expr = match t.as_rule() {
+      Rule::expr | Rule::term | Rule::equality | Rule::addative | Rule::primary | Rule::binding => {
+        Expression::parse(t.into_inner())
+      }
+      Rule::number => {
+        Number::parse(t.into_inner()).map(|c| Expression::Number(c))
+      }
+      Rule::cast => {
+        Cast::parse(t.into_inner()).map(|c| Expression::Cast(Box::new(c)))
+      }
+      Rule::string => {
+        SqlString::parse(t.into_inner()).map(|c| Expression::String(c))
+      }
+      Rule::function_call => {
+        FunctionCall::parse(t.into_inner()).map(|c| Expression::FunctionCall(c))
+      }
+      Rule::table_ident => {
+        TableIdent::parse(t.into_inner()).map(|c| Expression::Ref(c))
+      }
+      Rule::select_stmt => {
+        Select::parse(t.into_inner()).map(|c| Expression::Select(Box::new(c)))
+      }
+      Rule::insert_stmt => {
+        InsertStmt::parse(t.into_inner()).map(|c| Expression::Insert(c))
       }
       _ => unparseable!(t)
-    };
-
-    let t = inp.pop_comments()?;
-    let expr = match t.as_rule() {
-      Rule::expr_opr => {
-        let mut inp = t.into_inner();
-        inp.filter_map(|t| match t.as_rule() {
-          Rule::expr_infix => {
-            let mut inp = t.into_inner();
-            let t = inp.next().unwrap();
-            let infix = match t.as_rule() {
-              Rule::operator => Operator::parse(t.into_inner()),
-              _ => unreachable!("{:?}", t),
-            };
-            let t = inp.next().unwrap();
-            let rhs = match t.as_rule() {
-              Rule::expr => Expression::parse(t.into_inner()), // TODO,
-              _ => unreachable!("{:?}", t),
-            };
-
-            Some((infix, rhs))
-          } // TODO
-          _ => unreachable!("{:?}", t),
-        })
-        .fold(lhs, |lhs, (infix, rhs)| {
-          Ok(Expression::Infix(infix?, Box::new((lhs?, rhs?))))
-        })
-      },
-      _ => unreachable!("{:?}", t)
     }?;
 
-    let t = inp.next();
-    match t {
-      Some(t) => match t.as_rule() {
+    inp.fold(Ok((expr, None)), |z, t| {
+      let (expr, operator) = z?;
+      Ok(match t.as_rule() {
         Rule::as_infix => {
           let mut inp = t.into_inner();
           let t = inp.pop()?;
           match t.as_rule() {
-            Rule::ttype => Ok(Expression::Cast(Box::new(Cast(expr, Ttype::parse(t.into_inner())?)))),
+            Rule::ttype => (Expression::Cast(Box::new(Cast(expr, Ttype::parse(t.into_inner())?))), operator),
             _ => unparseable!(t)
           }
         },
-        _ => unparseable!(t)
-      },
-      None => Ok(expr),
-    }
+        Rule::expr | Rule::term | Rule::equality | Rule::addative | Rule::primary | Rule::binding => {
+          (Expression::Infix(operator.unwrap(), Box::new((expr, Expression::parse(t.into_inner())?))), None)
+        },
+        _ => {
+          match Operator::parse_one(t) {
+            Ok(opr) => (expr, Some(opr)),
+            Err(e) => return Err(e)
+          }
+        }
+      })
+    }).map(|(expr, _)| expr)
   }
 }
 
@@ -359,9 +337,8 @@ impl Parseable for InsertConflict {
   }
 }
 
-impl Parseable for ExprOrDefault {
-  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<ExprOrDefault, ParseError> {
-    let t = inp.pop()?;
+impl ParseOne for ExprOrDefault {
+  fn parse_one<'a>(t: P<'a>) -> Result<ExprOrDefault, ParseError> {
     Ok(match t.as_rule() {
       Rule::expr => ExprOrDefault::Expression(Expression::parse(t.into_inner())?),
       Rule::default_lit => ExprOrDefault::Default,
@@ -473,9 +450,8 @@ impl Parseable for ColumnConstraintReferences {
   }
 }
 
-impl Parseable for ColumnConstraint {
-  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<ColumnConstraint, ParseError> {
-    let t = inp.pop()?;
+impl ParseOne for ColumnConstraint {
+  fn parse_one<'a>(t: P<'a>) -> Result<ColumnConstraint, ParseError> {
     Ok(match t.as_rule() {
       Rule::column_not_null => ColumnConstraint::NotNull,
       Rule::column_null => ColumnConstraint::Null,
@@ -498,14 +474,19 @@ impl Parseable for ColumnConstraint {
   }
 }
 
-impl Parseable for Operator {
-  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<Operator, ParseError> {
-    let t = inp.pop()?;
+impl ParseOne for Operator {
+  fn parse_one<'a>(t: P<'a>) -> Result<Operator, ParseError> {
     Ok(match t.as_rule() {
       Rule::operator => Operator::parse(t.into_inner())?,
       Rule::operator_eq => Operator::Equal,
       Rule::operator_and => Operator::And,
       Rule::operator_add => Operator::Add,
+      Rule::or_lit => Operator::OrLit,
+      Rule::and_lit => Operator::AndLit,
+      Rule::operator_gt => Operator::Greater,
+      Rule::operator_lt => Operator::Less,
+      Rule::operator_gte => Operator::GreaterEqual,
+      Rule::operator_lte => Operator::LessEqual,
       _ => unparseable!(t)
     })
   }
@@ -532,7 +513,7 @@ impl Parseable for CreateTableExcludeWith {
       _ => unparseable!(t)
     };
 
-    Ok(CreateTableExcludeWith((expr, operator)))
+    Ok(CreateTableExcludeWith(expr, operator))
   }
 }
 
@@ -753,30 +734,49 @@ impl Parseable for Select {
     };
 
     let t = inp.next();
-    let from_clause = match t {
-      Some(t) => Some(match t.as_rule() {
+    let (t, from_clause) = match t {
+      Some(t) => (inp.next(), Some(match t.as_rule() {
         Rule::select_from => a(t.into_inner().filter_map(|t| match t.as_rule() {
           Rule::select_from_item => Some(FromClause::parse(t.into_inner())),
           Rule::comment => None,
           _ => unreachable!("{:?}", t),
         }))?,
         _ => unparseable!(t),
-      }),
-      None => None
+      })),
+      None => (t, None)
+    };
+
+    let (t, condition) = match t {
+      Some(t) => (inp.next(), Some(match t.as_rule() {
+        Rule::select_where => {
+          let mut inp = t.into_inner();
+          let t = inp.pop()?;
+
+          match t.as_rule() {
+            Rule::expr => Expression::parse(t.into_inner())?,
+            _ => unparseable!(t)
+          }
+        },
+        _ => unparseable!(t),
+      })),
+      None => (t, None)
   };
 
     Ok(Select {
       with: with,
       clause: select_clause,
       from: from_clause,
+      condition: condition
     })
   }
 }
 
-impl Parseable for CreateSchema {
-  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<CreateSchema, ParseError> {
-    let t = inp.pop()?;
-    Ok(CreateSchema(Var::parse(t.into_inner())?))
+impl ParseOne for CreateSchema {
+  fn parse_one<'a>(t: P<'a>) -> Result<CreateSchema, ParseError> {
+    match t.as_rule() {
+      Rule::s_var => Ok(CreateSchema(Var::parse(t.into_inner())?)),
+      _ => unparseable!(t)
+    }
   }
 }
 
@@ -830,9 +830,8 @@ impl Parseable for CreateFunctionArg {
   }
 }
 
-impl Parseable for CreateFunctionReturns {
-  fn parse<'a, I: Ps<'a>>(mut inp: I) -> Result<CreateFunctionReturns, ParseError> {
-    let t = inp.pop()?;
+impl ParseOne for CreateFunctionReturns {
+  fn parse_one<'a>(t: P<'a>) -> Result<CreateFunctionReturns, ParseError> {
     match t.as_rule() {
       Rule::create_table => {
         CreateTable::parse(t.into_inner()).map(|c| CreateFunctionReturns::Table(c))
