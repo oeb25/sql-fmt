@@ -1,4 +1,7 @@
 use ast::*;
+use std::sync::Arc;
+use rayon;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -107,30 +110,30 @@ impl Default for Context {
 }
 
 pub trait Format {
-  fn format(self, ctx: &Context) -> String;
+  fn format(self, ctx: &Arc<Context>) -> String;
 }
 
-fn format_join_by<T: Format, I: IntoIterator<Item = T>>(
+fn format_join_by<T: Format + Send, I: rayon::iter::IntoParallelIterator<Item = T>>(
   items: I,
   join_by: &str,
-  ctx: &Context,
+  ctx: &Arc<Context>,
 ) -> String {
   items
-    .into_iter()
-    .map(|c| c.format(ctx))
+    .into_par_iter()
+    .map(|c| c.format(&ctx.clone()))
     .collect::<Vec<_>>()
     .join(join_by)
 }
 
 impl<'a> Format for &'a Var {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
       Var::Raw(ref s) | &Var::Escaped(ref s) => ctx.format_name(s),
     }
   }
 }
 impl<'a> Format for &'a TableIdent {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match &self.schema {
       Some(ref schema) => format!("{}.{}", schema.format(ctx), self.name.format(ctx)),
       None => format!("{}", self.name.format(ctx)),
@@ -138,7 +141,7 @@ impl<'a> Format for &'a TableIdent {
   }
 }
 impl<'a> Format for &'a Ttype {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match &self.schema {
       Some(ref schema) => format!("{}.{}", schema.format(ctx), self.name.format(ctx)),
       None => format!("{}", self.name.format(ctx)),
@@ -146,7 +149,7 @@ impl<'a> Format for &'a Ttype {
   }
 }
 impl<'a> Format for &'a FunctionCall {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self.args {
       Some(ref args) => format!(
         "{}({})",
@@ -158,7 +161,7 @@ impl<'a> Format for &'a FunctionCall {
   }
 }
 impl<'a> Format for &'a ColumnConstraintReferences {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{} {}{}{}",
       ctx.keyword("references"),
@@ -175,7 +178,7 @@ impl<'a> Format for &'a ColumnConstraintReferences {
   }
 }
 impl<'a> Format for &'a Operator {
-  fn format(self, _ctx: &Context) -> String {
+  fn format(self, _ctx: &Arc<Context>) -> String {
     match self {
       Operator::And => "&&",
       Operator::Equal => "=",
@@ -185,7 +188,7 @@ impl<'a> Format for &'a Operator {
   }
 }
 impl<'a> Format for &'a CreateTableExcludeWith {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{} {} {}",
       (self.0).0.format(ctx),
@@ -195,7 +198,7 @@ impl<'a> Format for &'a CreateTableExcludeWith {
   }
 }
 impl<'a> Format for &'a CreateTableExclude {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{}({})",
       match self.using {
@@ -207,7 +210,7 @@ impl<'a> Format for &'a CreateTableExclude {
   }
 }
 impl<'a> Format for &'a CreateTableField {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
       CreateTableField::Column(ref c) => {
         let name_spaces = (0..ctx.field_name_length - c.name.len() + 1)
@@ -226,7 +229,12 @@ impl<'a> Format for &'a CreateTableField {
             type_spaces,
             format_join_by(constraints, " ", ctx)
           ),
-          None => format!("{}{}{}", c.name.format(ctx), name_spaces, c.ttype.format(ctx)),
+          None => format!(
+            "{}{}{}",
+            c.name.format(ctx),
+            name_spaces,
+            c.ttype.format(ctx)
+          ),
         }
       }
       CreateTableField::Unique(ref c) => {
@@ -250,21 +258,22 @@ impl<'a> Format for &'a CreateTableField {
   }
 }
 impl<'a> Format for &'a CreateTable {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     use std;
     let mut fields: Vec<_> = self.fields.iter().map(|f| f).collect();
 
     if ctx.options.sort_table_columns {
       fields.sort_by(|a, b| match (&a, &b) {
-        (&CreateTableField::Column(ref a), &CreateTableField::Column(ref b)) => {
-          match ((a.is_primary_key(), b.is_primary_key()), (a.is_not_null(), b.is_not_null())) {
-            ((true, false), _) => std::cmp::Ordering::Less,
-            ((false, true), _) => std::cmp::Ordering::Greater,
-            (_, (true, false)) => std::cmp::Ordering::Less,
-            (_, (false, true)) => std::cmp::Ordering::Greater,
-            _ => a.name.partial_cmp(&b.name).unwrap(),
-          }
-        }
+        (&CreateTableField::Column(ref a), &CreateTableField::Column(ref b)) => match (
+          (a.is_primary_key(), b.is_primary_key()),
+          (a.is_not_null(), b.is_not_null()),
+        ) {
+          ((true, false), _) => std::cmp::Ordering::Less,
+          ((false, true), _) => std::cmp::Ordering::Greater,
+          (_, (true, false)) => std::cmp::Ordering::Less,
+          (_, (false, true)) => std::cmp::Ordering::Greater,
+          _ => a.name.partial_cmp(&b.name).unwrap(),
+        },
         (&CreateTableField::Column(_), _) => std::cmp::Ordering::Greater,
         (_, _) => std::cmp::Ordering::Equal,
       })
@@ -284,8 +293,11 @@ impl<'a> Format for &'a CreateTable {
         CreateTableField::Exclude(_) => 0,
       })
     });
-    let ctx = ctx.field_name_length(longest_field_name);
-    let ctx = ctx.field_type_length(longest_field_type);
+    let ctx = Arc::new(
+      ctx
+        .field_name_length(longest_field_name)
+        .field_type_length(longest_field_type),
+    );
 
     format!(
       "{} {}\n  ( {}\n  ){}",
@@ -304,14 +316,14 @@ impl<'a> Format for &'a CreateTable {
   }
 }
 impl<'a> Format for &'a Select {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     let longest_select_expr = self.clause.0.iter().fold(0, |max, f| {
       max.max(match f.expr_or_all {
         ExprOrAll::All => 1,
         ExprOrAll::Expression(ref expr) => expr.format(ctx).len(),
       })
     });
-    let ctx = ctx.select_expr_length(longest_select_expr);
+    let ctx = Arc::new(ctx.select_expr_length(longest_select_expr));
     format!(
       "{with}{select} {clause}\n  {from}",
       with = match self.with {
@@ -321,19 +333,23 @@ impl<'a> Format for &'a Select {
       select = ctx.keyword("select"),
       clause = format_join_by(&self.clause.0, "\n     , ", &ctx),
       from = match self.from {
-        Some(ref from) => format!("{} {}", ctx.keyword("from"), format_join_by(from, "\n     , ", &ctx)),
+        Some(ref from) => format!(
+          "{} {}",
+          ctx.keyword("from"),
+          format_join_by(from, "\n     , ", &ctx)
+        ),
         None => "".to_owned(),
       }
     )
   }
 }
 impl<'a> Format for &'a CreateSchema {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!("{} {}", ctx.keyword("create schema"), self.0.format(ctx))
   }
 }
 impl<'a> Format for &'a CreateFunctionArg {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{}{}{}{}",
       match self.mode {
@@ -353,7 +369,7 @@ impl<'a> Format for &'a CreateFunctionArg {
   }
 }
 impl<'a> Format for &'a CreateFunction {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{} {}\n  ( {}\n  )\n{} {}",
       ctx.keyword("create function"),
@@ -365,7 +381,7 @@ impl<'a> Format for &'a CreateFunction {
   }
 }
 impl<'a> Format for &'a WithItem {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{} {} (\n{}\n  )",
       self.name.format(ctx),
@@ -375,7 +391,7 @@ impl<'a> Format for &'a WithItem {
   }
 }
 impl<'a> Format for &'a With {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{}\n  {}",
       ctx.keyword("with"),
@@ -384,7 +400,7 @@ impl<'a> Format for &'a With {
   }
 }
 impl<'a> Format for &'a Cast {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{}({} {} {})",
       ctx.keyword("cast"),
@@ -395,7 +411,7 @@ impl<'a> Format for &'a Cast {
   }
 }
 impl<'a> Format for &'a Number {
-  fn format(self, _ctx: &Context) -> String {
+  fn format(self, _ctx: &Arc<Context>) -> String {
     match self {
       Number::Float(ref f) => format!("{}", f),
       Number::Int(ref f) => format!("{}", f),
@@ -403,7 +419,7 @@ impl<'a> Format for &'a Number {
   }
 }
 impl<'a> Format for &'a Expression {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
       Expression::Infix(ref opr, ref exprs) => format!(
         "{} {} {}",
@@ -422,7 +438,7 @@ impl<'a> Format for &'a Expression {
   }
 }
 impl<'a> Format for &'a ExprOrDefault {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
       ExprOrDefault::Default => ctx.keyword("default"),
       ExprOrDefault::Expression(ref expr) => expr.format(ctx),
@@ -430,7 +446,7 @@ impl<'a> Format for &'a ExprOrDefault {
   }
 }
 impl<'a> Format for &'a InsertValues {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
       InsertValues::Default => format!("{}", ctx.keyword("default")),
       InsertValues::Values(ref vs) => format!(
@@ -443,12 +459,12 @@ impl<'a> Format for &'a InsertValues {
   }
 }
 impl<'a> Format for &'a InsertConflictUpdate {
-  fn format(self, _ctx: &Context) -> String {
+  fn format(self, _ctx: &Arc<Context>) -> String {
     format!("") // TODO
   }
 }
 impl<'a> Format for &'a InsertConflictAction {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
       InsertConflictAction::Nothing => ctx.keyword("nothing"),
       InsertConflictAction::Update(ref u) => format!("{} {}", ctx.keyword("update"), u.format(ctx)),
@@ -456,7 +472,7 @@ impl<'a> Format for &'a InsertConflictAction {
   }
 }
 impl<'a> Format for &'a InsertConflict {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{} ({}) {}",
       ctx.keyword("on conflict"),
@@ -466,14 +482,14 @@ impl<'a> Format for &'a InsertConflict {
   }
 }
 impl<'a> Format for &'a InsertReturn {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
       InsertReturn::All => format!("{} *", ctx.keyword("returning")),
     }
   }
 }
 impl<'a> Format for &'a InsertStmt {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{with}{kw} {table}\n{columns}\n{values}{conflict}{ret}",
       with = match self.with {
@@ -499,7 +515,7 @@ impl<'a> Format for &'a InsertStmt {
   }
 }
 impl<'a> Format for &'a ColumnConstraintReferencesMatch {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     use ast::ColumnConstraintReferencesMatch;
     match self {
       ColumnConstraintReferencesMatch::Full => ctx.keyword("full"),
@@ -509,7 +525,7 @@ impl<'a> Format for &'a ColumnConstraintReferencesMatch {
   }
 }
 impl<'a> Format for &'a ColumnConstraint {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     use ast::ColumnConstraint::*;
     match self {
       NotNull => ctx.keyword("not null"),
@@ -523,7 +539,7 @@ impl<'a> Format for &'a ColumnConstraint {
   }
 }
 impl<'a> Format for &'a ExprOrAll {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
       ExprOrAll::All => "*".to_owned(),
       ExprOrAll::Expression(ref expr) => expr.format(ctx),
@@ -531,7 +547,7 @@ impl<'a> Format for &'a ExprOrAll {
   }
 }
 impl<'a> Format for &'a SelectClauseItem {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     let expr = self.expr_or_all.format(ctx);
     let as_spaces = (0..ctx.select_expr_length - expr.len() + 1)
       .map(|_| " ")
@@ -547,11 +563,11 @@ impl<'a> Format for &'a SelectClauseItem {
   }
 }
 impl<'a> Format for &'a FromClause {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{expr}{ass}",
       expr = self.from.format(ctx),
-      ass  = match self.ass {
+      ass = match self.ass {
         Some(ref ass) => format!(" {} {}", ctx.keyword("as"), ass.format(ctx)),
         None => "".to_owned(),
       },
@@ -559,12 +575,12 @@ impl<'a> Format for &'a FromClause {
   }
 }
 impl<'a> Format for &'a CreateFunctionArgMode {
-  fn format(self, _ctx: &Context) -> String {
+  fn format(self, _ctx: &Arc<Context>) -> String {
     unimplemented!()
   }
 }
 impl<'a> Format for &'a CreateFunctionReturns {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
       CreateFunctionReturns::Table(ref create_table) => create_table.format(ctx),
       CreateFunctionReturns::Ttype(ref ttype) => ttype.format(ctx),
@@ -575,7 +591,7 @@ impl<'a> Format for &'a CreateFunctionReturns {
   }
 }
 impl<'a> Format for &'a SqlString {
-  fn format(self, _ctx: &Context) -> String {
+  fn format(self, _ctx: &Arc<Context>) -> String {
     match self {
       SqlString::Raw(ref s) => format!("'{}'", s),
       SqlString::DollarQuoted(ref p, ref s) => format!("{}{}{}", p, s, p),
@@ -583,7 +599,7 @@ impl<'a> Format for &'a SqlString {
   }
 }
 impl<'a> Format for &'a CreateFunctionBody {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     use ast::CreateFunctionBody::*;
     match self {
       AsDef(_) => unreachable!(),
@@ -597,7 +613,7 @@ impl<'a> Format for &'a CreateFunctionBody {
   }
 }
 impl<'a> Format for &'a TransactionStmt {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     match self {
       TransactionStmt::Begin => ctx.keyword("begin"),
       TransactionStmt::End => ctx.keyword("end"),
@@ -605,7 +621,7 @@ impl<'a> Format for &'a TransactionStmt {
   }
 }
 impl<'a> Format for &'a View {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     format!(
       "{} {} {}\n{}",
       ctx.keyword("create view"),
@@ -616,7 +632,7 @@ impl<'a> Format for &'a View {
   }
 }
 impl<'a> Format for &'a Statement {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     use ast::Statement::*;
     match self {
       CreateTable(ref stmt) => stmt.format(ctx),
@@ -631,7 +647,7 @@ impl<'a> Format for &'a Statement {
   }
 }
 impl<'a> Format for &'a ReturnStmt {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     use ast::ReturnStmt::*;
     format!(
       "{} {}",
@@ -648,7 +664,7 @@ impl<'a> Format for &'a ReturnStmt {
   }
 }
 impl<'a> Format for &'a Document {
-  fn format(self, ctx: &Context) -> String {
+  fn format(self, ctx: &Arc<Context>) -> String {
     let mut s: String = self
       .0
       .iter()
