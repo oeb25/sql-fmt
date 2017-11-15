@@ -239,6 +239,12 @@ impl Parseable for Expression {
       Rule::insert_stmt => {
         InsertStmt::parse(t.into_inner()).map(|c| Expression::Insert(c))
       }
+      Rule::not_expr => {
+        Expression::parse(t.into_inner()).map(|c| Expression::Not(Box::new(c)))
+      },
+      Rule::exists_expr => {
+        Expression::parse(t.into_inner()).map(|c| Expression::Exists(Box::new(c)))
+      },
       _ => unparseable!(t)
     }?;
 

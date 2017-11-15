@@ -31,11 +31,14 @@ keyword = { ^"returning" }
 
 // Expression
 
+not_expr = { ^"not" ~ expr }
+exists_expr = { ^"exists" ~ expr }
+
 cast = { ^"cast" ~ "(" ~ expr ~ ^"as" ~ ttype ~ ")" }
 function_name = { table_ident }
 function_arguments = { expr ~ ("," ~ expr)* }
 function_call = { function_name ~ "(" ~ function_arguments? ~ ")" }
-term = { (("(" ~ expr ~ ")") | cast | number | string | select_stmt | insert_stmt | function_call | table_ident) ~ as_infix? }
+term = { (("(" ~ expr ~ ")") | not_expr | exists_expr | cast | number | string | select_stmt | insert_stmt | function_call | table_ident) ~ as_infix? }
 as_infix = { ^"::" ~ ttype }
 
 primary_operator = _{ operator_mul | operator_div }

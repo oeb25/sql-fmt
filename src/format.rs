@@ -484,8 +484,13 @@ impl<'a> Format for &'a Expression {
       Expression::Insert(ref i) => i.format(ctx),
       Expression::String(ref s) => s.format(ctx),
       Expression::Number(ref n) => n.format(ctx),
-      Expression::Select(ref sel) => sel.format(ctx),
+      Expression::Select(ref sel) => format!("{}", &sel.format(ctx)),
       Expression::Cast(ref cast) => cast.format(ctx),
+      Expression::Not(ref expr) => format!("{} {}", ctx.keyword("not"), expr.format(ctx)),
+      Expression::Exists(expr) if expr.is_select() => {
+        format!("{} (\n{}\n)", ctx.keyword("exists"), ctx.indent(&expr.format(ctx)))
+      }
+      Expression::Exists(ref expr) => format!("{} {}", ctx.keyword("exists"), expr.format(ctx)),
     }
   }
 }

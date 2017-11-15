@@ -46,6 +46,17 @@ pub enum Expression {
   Insert(InsertStmt),
   Cast(Box<Cast>),
   Number(Number),
+  Not(Box<Expression>),
+  Exists(Box<Expression>),
+}
+
+impl Expression {
+  pub fn is_select(&self) -> bool {
+    match self {
+      Expression::Select(_) => true,
+      _ => false,
+    }
+  }
 }
 
 #[derive(Debug, Clone)]
