@@ -321,6 +321,17 @@ impl<'a> Format for &'a CreateTable {
     )
   }
 }
+fn and_format(c: &Expression, ctx: &Arc<Context>) -> String {
+  match c {
+    Expression::Infix(Operator::AndLit, box (ref a, ref b)) => format!(
+      "{}\n   {} {}",
+      and_format(a, ctx),
+      ctx.keyword("and"),
+      b.format(ctx),
+    ),
+    _ => c.format(&ctx),
+  }
+}
 impl<'a> Format for &'a Select {
   fn format(self, ctx: &Arc<Context>) -> String {
     let longest_select_expr = self.clause.0.iter().fold(0, |max, f| {
@@ -347,11 +358,18 @@ impl<'a> Format for &'a Select {
         None => "".to_owned(),
       },
       where = match self.condition {
-        Some(ref condition) => format!(
-          "\n {} {}",
-          ctx.keyword("where"),
-          condition.format(&ctx),
-        ),
+        Some(ref condition) => {
+          format!(
+            "\n {} {}",
+            ctx.keyword("where"),
+            and_format(condition, &ctx),
+          )
+          // format!(
+          //   "\n {} {}",
+          //   ctx.keyword("where"),
+          //   condition.format(&ctx),
+          // )
+        },
         None => "".to_owned(),
       }
     )

@@ -1,5 +1,6 @@
 #![feature(try_from)]
 #![feature(match_default_bindings)]
+#![feature(box_patterns)]
 
 extern crate pest;
 #[macro_use]

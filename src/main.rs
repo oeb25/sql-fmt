@@ -24,7 +24,6 @@ pub extern "C" fn wasm_prettify(s: *mut c_char) -> *mut c_char {
 }
 
 fn main() {
-    println!("got run");
     use std::io::Read;
     std::env::args().skip(1).next().map(|name| {
         let mut d = String::new();

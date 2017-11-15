@@ -11,6 +11,7 @@ use ast::*;
 #[derive(Debug, Clone)]
 pub enum ParseError {
   Dunno,
+  Comment,
   Unparseable(String),
   More(Vec<ParseError>),
 }
@@ -58,8 +59,8 @@ where
 
 macro_rules! unparseable {
     ($fmt:expr) => ({
-        // unreachable!("{:?} : {}:{}", $fmt, file!(), line!())
-        return Err(ParseError::Unparseable(format!("{:?} : {}:{} -> {}", $fmt, file!(), line!(), $fmt.as_str())))
+        unreachable!("{:?} : {}:{}", $fmt, file!(), line!())
+        // return Err(ParseError::Unparseable(format!("{:?} : {}:{} -> {}", $fmt, file!(), line!(), $fmt.as_str())))
     });
 }
 
@@ -244,6 +245,7 @@ impl Parseable for Expression {
     inp.fold(Ok((expr, None)), |z, t| {
       let (expr, operator) = z?;
       Ok(match t.as_rule() {
+        Rule::comment => (expr, operator),
         Rule::as_infix => {
           let mut inp = t.into_inner();
           let t = inp.pop()?;
@@ -487,6 +489,7 @@ impl ParseOne for Operator {
       Rule::operator_lt => Operator::Less,
       Rule::operator_gte => Operator::GreaterEqual,
       Rule::operator_lte => Operator::LessEqual,
+      Rule::comment => return Err(ParseError::Comment),
       _ => unparseable!(t)
     })
   }
@@ -747,18 +750,20 @@ impl Parseable for Select {
     };
 
     let (t, condition) = match t {
-      Some(t) => (inp.next(), Some(match t.as_rule() {
+      Some(tt) => match tt.as_rule() {
         Rule::select_where => {
-          let mut inp = t.into_inner();
+          let mut old_inp = inp;
+          let mut inp = tt.into_inner();
           let t = inp.pop()?;
 
           match t.as_rule() {
-            Rule::expr => Expression::parse(t.into_inner())?,
+            Rule::expr => (old_inp.next(), Some(Expression::parse(t.into_inner())?)),
             _ => unparseable!(t)
           }
         },
-        _ => unparseable!(t),
-      })),
+        Rule::comment => (Some(tt), None),
+        _ => unparseable!(tt),
+      },
       None => (t, None)
   };
 
