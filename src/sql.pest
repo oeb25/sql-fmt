@@ -35,7 +35,7 @@ cast = { ^"cast" ~ "(" ~ expr ~ ^"as" ~ ttype ~ ")" }
 function_name = { table_ident }
 function_arguments = { expr ~ ("," ~ expr)* }
 function_call = { function_name ~ "(" ~ function_arguments? ~ ")" }
-term = { ("(" ~ expr ~ ")") | cast | number | string | select_stmt | insert_stmt | function_call | table_ident }
+term = { (("(" ~ expr ~ ")") | cast | number | string | select_stmt | insert_stmt | function_call | table_ident) ~ as_infix? }
 as_infix = { ^"::" ~ ttype }
 
 primary_operator = _{ operator_mul | operator_div }
@@ -44,13 +44,13 @@ primary = { term ~ (primary_operator ~ term)* }
 addative_operator = _{ operator_add | operator_sub }
 addative = { primary ~ (addative_operator ~ primary)* }
 
-equality_operator = _{ operator_eq | operator_and | operator_lte | operator_gte | operator_lt | operator_gt }
+equality_operator = _{ operator_eq | operator_and | operator_lte | operator_gte | operator_lt | operator_gt | operator_contains | operator_contained_by }
 equality = { addative ~ (equality_operator ~ addative)* }
 
 binding_operator = _{ and_lit | or_lit }
 binding = { equality ~ (binding_operator ~ equality)* }
 
-expr = { binding ~ as_infix? }
+expr = { binding }
 
 // Create Statement
 
@@ -82,6 +82,8 @@ operator_lt = { "<" }
 operator_gt = { ">" }
 operator_mul = { "*" }
 operator_div = { "/" }
+operator_contains = { "@>" }
+operator_contained_by = { "<@" }
 operator = { operator_eq | operator_and | operator_add | and_lit | or_lit | operator_lte | operator_gte | operator_lt| operator_gt }
 // { column_name | ( expression ) } [ opclass ] [ ASC | DESC ] [ NULLS { FIRST | LAST } ]
 column_exclude_elm = { expr }

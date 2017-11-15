@@ -489,6 +489,8 @@ impl ParseOne for Operator {
       Rule::operator_lt => Operator::Less,
       Rule::operator_gte => Operator::GreaterEqual,
       Rule::operator_lte => Operator::LessEqual,
+      Rule::operator_contains => Operator::Contains,
+      Rule::operator_contained_by => Operator::ContainedBy,
       Rule::comment => return Err(ParseError::Comment),
       _ => unparseable!(t)
     })
@@ -754,7 +756,7 @@ impl Parseable for Select {
         Rule::select_where => {
           let mut old_inp = &mut inp;
           let mut inp = tt.into_inner();
-          let t = inp.pop()?;
+          let t = inp.pop_comments()?;
 
           match t.as_rule() {
             Rule::expr => (old_inp.next(), Some(Expression::parse(t.into_inner())?)),

@@ -216,6 +216,8 @@ pub enum Operator {
   Less,
   GreaterEqual,
   LessEqual,
+  Contains,
+  ContainedBy,
 }
 
 #[derive(Debug, Clone)]

@@ -190,6 +190,8 @@ impl<'a> Format for &'a Operator {
       Operator::Less => "<".to_owned(),
       Operator::GreaterEqual => ">=".to_owned(),
       Operator::LessEqual => "<=".to_owned(),
+      Operator::Contains => "@>".to_owned(),
+      Operator::ContainedBy => "<@".to_owned(),
     }
   }
 }
