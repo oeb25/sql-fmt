@@ -752,12 +752,31 @@ impl Parseable for Select {
     let (t, condition) = match t {
       Some(tt) => match tt.as_rule() {
         Rule::select_where => {
-          let mut old_inp = inp;
+          let mut old_inp = &mut inp;
           let mut inp = tt.into_inner();
           let t = inp.pop()?;
 
           match t.as_rule() {
             Rule::expr => (old_inp.next(), Some(Expression::parse(t.into_inner())?)),
+            _ => unparseable!(t)
+          }
+        },
+        Rule::select_limit | Rule::comment => (Some(tt), None),
+        _ => unparseable!(tt),
+      },
+      None => (t, None)
+  };
+
+    let (t, limit) = match t {
+      Some(tt) => match tt.as_rule() {
+        Rule::select_limit => {
+          let mut old_inp = &mut inp;
+          let mut inp = tt.into_inner();
+          let t = inp.pop()?;
+
+          match t.as_rule() {
+            Rule::all_lit => (old_inp.next(), Some(Limit::All)),
+            Rule::expr => (old_inp.next(), Some(Limit::Count(Expression::parse(t.into_inner())?))),
             _ => unparseable!(t)
           }
         },
@@ -771,7 +790,8 @@ impl Parseable for Select {
       with: with,
       clause: select_clause,
       from: from_clause,
-      condition: condition
+      condition: condition,
+      limit: limit,
     })
   }
 }

@@ -179,14 +179,16 @@ with = { ^"with" ~ with_item ~ ("," ~ with_item)* }
 // Select Statement
 
 all = { "*" }
+all_lit = { ^"all" }
 
 select_clause_item = { (all | expr) ~ (^"as" ~ s_var)? }
 select_clause = { select_clause_item ~ ("," ~ select_clause_item)* }
 select_from_item = { expr ~ ^"as"? ~ (!keyword ~ s_var)? }
 select_from = { ^"from" ~ (select_from_item ~ ("," ~ select_from_item)*) }
 select_where = { ^"where" ~ expr }
+select_limit = { ^"limit" ~ (all_lit | expr) }
 
-select_stmt = { with? ~ ^"select" ~ select_clause ~ select_from? ~ select_where? }
+select_stmt = { with? ~ ^"select" ~ select_clause ~ select_from? ~ select_where? ~ select_limit? }
 
 // Insert Statement
 

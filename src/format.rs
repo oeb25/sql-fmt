@@ -321,6 +321,14 @@ impl<'a> Format for &'a CreateTable {
     )
   }
 }
+impl<'a> Format for &'a Limit {
+  fn format(self, ctx: &Arc<Context>) -> String {
+    match self {
+      Limit::All => ctx.keyword("all"),
+      Limit::Count(ref expr) => expr.format(ctx),
+    }
+  }
+}
 fn and_format(c: &Expression, ctx: &Arc<Context>) -> String {
   match c {
     Expression::Infix(Operator::AndLit, box (ref a, ref b)) => format!(
@@ -342,7 +350,7 @@ impl<'a> Format for &'a Select {
     });
     let ctx = Arc::new(ctx.select_expr_length(longest_select_expr));
     format!(
-      "{with}{select} {clause}{from}{where}",
+      "{with}{select} {clause}{from}{where}{limit}",
       with = match self.with {
         Some(ref with) => format!("{}\n", with.format(&ctx)),
         None => "".to_owned(),
@@ -369,6 +377,16 @@ impl<'a> Format for &'a Select {
           //   ctx.keyword("where"),
           //   condition.format(&ctx),
           // )
+        },
+        None => "".to_owned(),
+      },
+      limit = match self.limit {
+        Some(ref limit) => {
+          format!(
+            "\n {} {}",
+            ctx.keyword("limit"),
+            limit.format(&ctx),
+          )
         },
         None => "".to_owned(),
       }

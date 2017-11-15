@@ -249,11 +249,18 @@ pub struct SelectClauseItem {
 }
 
 #[derive(Debug, Clone)]
+pub enum Limit {
+  All,
+  Count(Expression),
+}
+
+#[derive(Debug, Clone)]
 pub struct Select {
   pub with: Option<With>,
   pub clause: SelectClause,
   pub from: Option<Vec<FromClause>>,
   pub condition: Option<Expression>,
+  pub limit: Option<Limit>,
 }
 
 #[derive(Debug, Clone)]
